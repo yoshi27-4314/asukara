@@ -12,6 +12,9 @@ export const CONFIG = {
   AWAI_URL: 'https://njdnfvlucwasrafoepmu.supabase.co',
   AWAI_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5qZG5mdmx1Y3dhc3JhZm9lcG11Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUzMTEzNjgsImV4cCI6MjA5MDg4NzM2OH0.jDjqf3nWqaQ0sMfDf-85dDQNbEhX90qLsOOhWJdDlM8',
 
+  // GAS Webhook URL（スプレッドシート同期用）
+  GAS_SYNC_URL: 'https://script.google.com/macros/s/AKfycbx9JpYWvi3p0HgA9Bb0RLgEjkgzbF6iJRuAX7Ks2VL3hwIEnpuTR0J1ydtxegGKRXjh/exec',
+
   // Case statuses (in order)
   CASE_STATUS: {
     RECEPTION: '受付',

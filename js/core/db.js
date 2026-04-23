@@ -77,6 +77,8 @@ export async function createContact(contactData) {
   if (!db) return null;
   const { data, error } = await db.from('ask_contacts').insert(contactData).select().single();
   if (error) { console.error('createContact error:', error); return null; }
+  // スプレッドシート同期（失敗してもアプリは止まらない）
+  _syncToSheet('ask_sync_contact', 'create', { ...contactData, supabase_id: data.id });
   return data;
 }
 
@@ -84,6 +86,7 @@ export async function updateContact(id, updates) {
   if (!db) return null;
   const { data, error } = await db.from('ask_contacts').update(updates).eq('id', id).select().single();
   if (error) { console.error('updateContact error:', error); return null; }
+  _syncToSheet('ask_sync_contact', 'update', { ...updates, supabase_id: id });
   return data;
 }
 
@@ -211,6 +214,7 @@ export async function createCase(caseData) {
   if (!db) return null;
   const { data, error } = await db.from('ask_cases').insert(caseData).select().single();
   if (error) { console.error('createCase error:', error); return null; }
+  _syncToSheet('ask_sync_case', 'create', { ...caseData, supabase_id: data.id });
   return data;
 }
 
@@ -218,6 +222,7 @@ export async function updateCase(id, updates) {
   if (!db) return null;
   const { data, error } = await db.from('ask_cases').update(updates).eq('id', id).select().single();
   if (error) { console.error('updateCase error:', error); return null; }
+  _syncToSheet('ask_sync_case', 'update', { ...updates, supabase_id: id });
   return data;
 }
 
@@ -321,4 +326,20 @@ export async function getContactStats() {
   }
 
   return counts;
+}
+
+// =============================================
+// スプレッドシート同期（バックグラウンド・失敗してもアプリは止まらない）
+// =============================================
+function _syncToSheet(action, mode, data) {
+  try {
+    fetch(CONFIG.GAS_SYNC_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, mode, data }),
+      mode: 'no-cors',
+    }).catch(err => console.warn('Sheet sync failed (non-blocking):', err));
+  } catch (e) {
+    console.warn('Sheet sync error (non-blocking):', e);
+  }
 }
