@@ -4,7 +4,7 @@
  */
 import { CONFIG } from '../core/config.js';
 import {
-  getCases, getCase, createCase, updateCase,
+  getCases, getCase, createCase, updateCase, deleteCase,
   getCaseHistory, addCaseHistory,
   getCaseDivisions, setCaseDivisions,
   getContacts, getContact, getCaseStatusCounts
@@ -185,6 +185,7 @@ async function renderCaseDetail(container, caseId) {
         <button id="btnBack" style="padding:6px 12px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;cursor:pointer;font-size:14px;">← 戻る</button>
         <div style="flex:1;"></div>
         <button id="btnEdit" style="padding:6px 12px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;cursor:pointer;font-size:13px;">編集</button>
+        <button id="btnDelete" style="padding:6px 12px;border:1px solid #DC2626;border-radius:8px;background:#fff;color:#DC2626;cursor:pointer;font-size:13px;">削除</button>
       </div>
 
       <!-- タイトル + ステータス -->
@@ -270,6 +271,13 @@ async function renderCaseDetail(container, caseId) {
   // イベント
   container.querySelector('#btnBack')?.addEventListener('click', () => renderCaseList(container));
   container.querySelector('#btnEdit')?.addEventListener('click', () => renderCaseEdit(container, caseId));
+  container.querySelector('#btnDelete')?.addEventListener('click', () => {
+    showConfirm(`「${caseData.title}」を削除しますか？\nこの操作は元に戻せません。`, async () => {
+      const ok = await deleteCase(caseId);
+      if (ok) { showToast('削除しました'); renderCaseList(container); }
+      else { showToast('削除に失敗しました'); }
+    });
+  });
   container.querySelector('#btnAssignDiv')?.addEventListener('click', () => renderDivisionAssignment(container, caseData, divisions));
 
   container.querySelector('#btnAdvance')?.addEventListener('click', () => {

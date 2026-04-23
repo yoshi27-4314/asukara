@@ -236,6 +236,7 @@ async function openContactDetail(container, contactId) {
           <button id="detailBack" style="background:none;border:none;color:${C.navy};font-size:14px;cursor:pointer;padding:4px 0;">← 一覧に戻る</button>
           <div style="flex:1;"></div>
           <button id="btnEditContact" style="background:none;border:1px solid ${C.gold};color:${C.gold};font-size:12px;padding:6px 14px;border-radius:8px;cursor:pointer;">編集</button>
+          <button id="btnDeleteContact" style="background:none;border:1px solid #DC2626;color:#DC2626;font-size:12px;padding:6px 14px;border-radius:8px;cursor:pointer;">削除</button>
         </div>
 
         <!-- 基本情報 -->
@@ -297,6 +298,14 @@ async function openContactDetail(container, contactId) {
     // イベント
     container.querySelector('#detailBack')?.addEventListener('click', () => renderContactList(container));
     container.querySelector('#btnEditContact')?.addEventListener('click', () => renderContactForm(container, contact));
+    container.querySelector('#btnDeleteContact')?.addEventListener('click', () => {
+      showConfirm(`「${contact.name}」を削除しますか？\nこの操作は元に戻せません。`, async () => {
+        const { deleteContact } = await import('../core/db.js');
+        const ok = await deleteContact(contact.id);
+        if (ok) { showToast('削除しました'); renderContactList(container); }
+        else { showToast('削除に失敗しました'); }
+      });
+    });
     container.querySelector('#btnAddRelation')?.addEventListener('click', () => renderRelationshipForm(container, contact));
 
     // 組織リンク

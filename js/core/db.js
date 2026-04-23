@@ -90,6 +90,13 @@ export async function updateContact(id, updates) {
   return data;
 }
 
+export async function deleteContact(id) {
+  if (!db) return false;
+  const { error } = await db.from('ask_contacts').delete().eq('id', id);
+  if (error) { console.error('deleteContact error:', error); return false; }
+  return true;
+}
+
 // =============================================
 // 組織 (ask_organizations) CRUD
 // =============================================
@@ -224,6 +231,13 @@ export async function updateCase(id, updates) {
   if (error) { console.error('updateCase error:', error); return null; }
   _syncToSheet('ask_sync_case', 'update', { ...updates, supabase_id: id });
   return data;
+}
+
+export async function deleteCase(id) {
+  if (!db) return false;
+  const { error } = await db.from('ask_cases').delete().eq('id', id);
+  if (error) { console.error('deleteCase error:', error); return false; }
+  return true;
 }
 
 // =============================================
