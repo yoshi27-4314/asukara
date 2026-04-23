@@ -15,6 +15,7 @@ export const CONFIG = {
   // Case statuses (in order)
   CASE_STATUS: {
     RECEPTION: '受付',
+    SITE_SURVEY: '現地調査',
     HEARING: 'ヒアリング',
     ASSIGNMENT: '振り分け',
     INTRODUCTION: '同行紹介',
@@ -27,7 +28,7 @@ export const CONFIG = {
   },
 
   CASE_STATUS_FLOW: [
-    '受付', 'ヒアリング', '振り分け', '同行紹介',
+    '受付', '現地調査', 'ヒアリング', '振り分け', '同行紹介',
     '事業部対応中', '完了確認', '紹介獲得',
   ],
 

@@ -147,7 +147,7 @@ async function renderCaseDetail(container, caseId) {
     const isCompleted = !isSpecialStatus && currentIdx >= 0 && i < currentIdx;
     const isCurrent = !isSpecialStatus && i === currentIdx;
     const isHighlight = ['同行紹介', '完了確認', '紹介獲得'].includes(status);
-    const icons = ['📞', '🎤', '🔀', '🤝', '🏗️', '🔍', '🤝'];
+    const icons = ['📞', '📍', '🎤', '🔀', '🤝', '🏗️', '🔍', '🤝'];
 
     let dotStyle = 'width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;';
     let labelStyle = 'font-size:9px;text-align:center;line-height:1.2;max-width:52px;';

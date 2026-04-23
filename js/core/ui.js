@@ -50,6 +50,7 @@ export function showConfirm(message, onConfirm, onCancel) {
 export function statusBadge(status) {
   const colors = {
     '受付': '#1B3A5C',
+    '現地調査': '#6366F1',
     'ヒアリング': '#0D7377',
     '振り分け': '#D97706',
     '同行紹介': '#B8860B',
