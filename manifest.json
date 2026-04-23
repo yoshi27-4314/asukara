@@ -1,0 +1,9 @@
+{
+  "name": "アスカラ",
+  "short_name": "アスカラ",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#F5F3EE",
+  "theme_color": "#1B3A5C",
+  "icons": []
+}
