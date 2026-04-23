@@ -16,8 +16,6 @@ $$ LANGUAGE plpgsql;
 -- =============================================
 -- 1. 組織テーブル（会社・支店・部署）
 -- =============================================
-COMMENT ON TABLE ask_organizations IS '組織（会社→支店→部署の階層構造）';
-
 CREATE TABLE IF NOT EXISTS ask_organizations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
@@ -29,6 +27,8 @@ CREATE TABLE IF NOT EXISTS ask_organizations (
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
+
+COMMENT ON TABLE ask_organizations IS '組織（会社→支店→部署の階層構造）';
 
 CREATE INDEX IF NOT EXISTS idx_ask_org_parent ON ask_organizations(parent_id);
 CREATE INDEX IF NOT EXISTS idx_ask_org_type ON ask_organizations(type);
