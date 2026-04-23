@@ -499,8 +499,11 @@ function renderDivisionAssignment(container, caseData, currentDivisions) {
 // ============================================================
 async function renderCaseWizard(container, step = 1, data = {}) {
   if (step === 1) {
-    // Step 1: 受付（誰から？）
-    const contacts = await getContacts({ limit: 200 });
+    // Step 1: 受付（依頼元の選択 — 顧客→支社→担当者の階層検索）
+    const contacts = await getContacts({ limit: 700 });
+    // 法人（取引先）と個人を分ける
+    const companies = contacts.filter(c => c.type === '取引先' && !c.registered_by?.includes('担当者'));
+    const persons = contacts.filter(c => c.type !== '取引先' || c.registered_by?.includes('担当者'));
 
     container.innerHTML = `
       <div class="fade-in">
@@ -509,7 +512,6 @@ async function renderCaseWizard(container, step = 1, data = {}) {
           <div style="font-size:15px;font-weight:700;">新規案件登録</div>
         </div>
 
-        <!-- ステップ表示 -->
         <div style="display:flex;justify-content:center;gap:8px;padding:12px 0;">
           <div style="width:24px;height:8px;border-radius:4px;background:#0D7377;"></div>
           <div style="width:8px;height:8px;border-radius:4px;background:#D6D3CB;"></div>
@@ -517,18 +519,33 @@ async function renderCaseWizard(container, step = 1, data = {}) {
         </div>
 
         <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;">
-          <div style="font-size:14px;font-weight:700;margin-bottom:12px;">📞 Step 1: 受付</div>
+          <div style="font-size:14px;font-weight:700;margin-bottom:12px;">📞 Step 1: 受付 — 依頼元</div>
 
+          <!-- 顧客検索（法人/個人） -->
           <div class="form-group">
-            <label>誰から？（依頼者）*</label>
-            <input type="text" id="wizContactSearch" placeholder="名前で検索...">
-            <div id="wizContactResults" style="max-height:150px;overflow-y:auto;margin-top:4px;"></div>
+            <label>顧客名 *（会社名 or 個人名を入力）</label>
+            <input type="text" id="wizClientSearch" placeholder="美濃善、加藤、山田..." value="${data.contact_name ? escapeHtml(data.contact_name) : ''}">
+            <div id="wizClientResults" style="max-height:200px;overflow-y:auto;margin-top:4px;"></div>
             <input type="hidden" id="wizContactId" value="${data.contact_id || ''}">
-            <div id="wizContactSelected" style="margin-top:4px;font-size:13px;color:#0D7377;font-weight:600;">
-              ${data.contact_name ? escapeHtml(data.contact_name) : ''}
+          </div>
+
+          <!-- 選択された顧客の表示 -->
+          <div id="wizSelectedInfo" style="display:${data.contact_id ? 'block' : 'none'};background:#f5f3ee;border-radius:8px;padding:12px;margin-bottom:12px;">
+            <div style="font-size:13px;font-weight:700;color:#1B3A5C;" id="wizSelectedName">${data.contact_name ? escapeHtml(data.contact_name) : ''}</div>
+            <div id="wizSelectedDetail" style="font-size:12px;color:#5a6272;margin-top:4px;"></div>
+          </div>
+
+          <!-- 担当者選択（顧客選択後に表示） -->
+          <div id="wizContactPersonSection" style="display:none;">
+            <div class="form-group">
+              <label>担当者（いれば選択）</label>
+              <select id="wizContactPerson" style="width:100%;padding:10px;border:1px solid #D6D3CB;border-radius:8px;font-size:14px;">
+                <option value="">担当者なし</option>
+              </select>
             </div>
           </div>
 
+          <!-- 紹介者 -->
           <div class="form-group">
             <label>紹介者（いれば）</label>
             <input type="text" id="wizRefSearch" placeholder="名前で検索...">
@@ -539,13 +556,13 @@ async function renderCaseWizard(container, step = 1, data = {}) {
             </div>
           </div>
 
+          <!-- エンドユーザー -->
           <div class="form-group">
             <label>
               <input type="checkbox" id="wizSameUser" ${data.same_end_user !== false ? 'checked' : ''} style="width:16px;height:16px;vertical-align:middle;">
               エンドユーザー = 依頼者と同じ
             </label>
           </div>
-
           <div id="wizEndUserSection" style="display:${data.same_end_user === false ? 'block' : 'none'};">
             <div class="form-group">
               <label>エンドユーザー</label>
@@ -560,8 +577,81 @@ async function renderCaseWizard(container, step = 1, data = {}) {
       </div>
     `;
 
-    // 検索機能セットアップ
-    setupContactSearch('wizContactSearch', 'wizContactResults', 'wizContactId', 'wizContactSelected', contacts);
+    // --- 顧客検索（階層対応） ---
+    const clientInput = container.querySelector('#wizClientSearch');
+    const clientResults = container.querySelector('#wizClientResults');
+
+    clientInput?.addEventListener('input', () => {
+      const q = clientInput.value.toLowerCase();
+      if (!q || q.length < 1) { clientResults.innerHTML = ''; return; }
+
+      // 全contactsから検索（法人優先、noteの中の情報も検索対象）
+      const matches = contacts.filter(c => {
+        const searchText = `${c.name || ''} ${c.name_kana || ''} ${c.note || ''}`.toLowerCase();
+        return searchText.includes(q) && !c.registered_by?.includes('担当者');
+      }).slice(0, 15);
+
+      clientResults.innerHTML = matches.map(c => {
+        const typeLabel = c.type === '取引先' ? '<span style="color:#1B3A5C;font-size:10px;background:#1B3A5C14;padding:1px 6px;border-radius:8px;">法人</span>' :
+                          '<span style="color:#0D7377;font-size:10px;background:#0D737714;padding:1px 6px;border-radius:8px;">個人</span>';
+        const phone = c.phone ? `<span style="color:#8a8a8a;font-size:11px;"> 📞${c.phone}</span>` : '';
+        return `
+          <div data-client-id="${c.id}" data-client-name="${escapeHtml(c.name)}" data-client-type="${c.type}"
+            style="padding:10px;border:1px solid #eee;border-radius:8px;margin-bottom:4px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <span style="font-weight:600;font-size:14px;">${escapeHtml(c.name)}</span>${phone}
+            </div>
+            ${typeLabel}
+          </div>
+        `;
+      }).join('') || '<div style="padding:8px;color:#8a8a8a;font-size:12px;">見つかりません</div>';
+
+      clientResults.querySelectorAll('[data-client-id]').forEach(el => {
+        el.addEventListener('click', () => {
+          const clientId = el.dataset.clientId;
+          const clientName = el.dataset.clientName;
+          const clientType = el.dataset.clientType;
+
+          document.getElementById('wizContactId').value = clientId;
+          clientInput.value = clientName;
+          clientResults.innerHTML = '';
+
+          // 選択表示
+          const infoDiv = document.getElementById('wizSelectedInfo');
+          infoDiv.style.display = 'block';
+          document.getElementById('wizSelectedName').textContent = clientName;
+
+          // この顧客に紐付く担当者を探す
+          const relatedContacts = contacts.filter(ct =>
+            ct.registered_by?.includes('担当者') &&
+            ct.tags?.some(t => t.includes('board_client_id:' + (el.dataset.clientId || '')))
+          );
+
+          // noteからboard_idを取り出して照合する方法もある
+          const clientBoardId = contacts.find(ct => ct.id === clientId)?.tags?.find(t => t.startsWith('board_id:'))?.replace('board_id:', '') || '';
+
+          const matchedContacts = contacts.filter(ct =>
+            ct.registered_by === 'board移行（担当者）' &&
+            ct.tags?.some(t => t === 'board_client_id:' + clientBoardId)
+          );
+
+          const personSection = document.getElementById('wizContactPersonSection');
+          const personSelect = document.getElementById('wizContactPerson');
+
+          if (matchedContacts.length > 0) {
+            personSection.style.display = 'block';
+            personSelect.innerHTML = '<option value="">担当者を選択...</option>' +
+              matchedContacts.map(ct => `<option value="${ct.id}">${escapeHtml(ct.name)}${ct.position ? ' (' + escapeHtml(ct.position) + ')' : ''}</option>`).join('');
+            document.getElementById('wizSelectedDetail').textContent = `担当者 ${matchedContacts.length}名`;
+          } else {
+            personSection.style.display = 'none';
+            document.getElementById('wizSelectedDetail').textContent = '';
+          }
+        });
+      });
+    });
+
+    // 紹介者・エンドユーザーの検索
     setupContactSearch('wizRefSearch', 'wizRefResults', 'wizRefId', 'wizRefSelected', contacts);
     setupContactSearch('wizEndSearch', 'wizEndResults', 'wizEndId', null, contacts);
 
@@ -572,13 +662,17 @@ async function renderCaseWizard(container, step = 1, data = {}) {
     container.querySelector('#btnBack')?.addEventListener('click', () => renderCaseList(container));
     container.querySelector('#btnNext1')?.addEventListener('click', () => {
       const contactId = document.getElementById('wizContactId').value;
-      if (!contactId) { showToast('依頼者を選択してください'); return; }
+      if (!contactId) { showToast('顧客を選択してください'); return; }
 
+      const personId = document.getElementById('wizContactPerson')?.value || null;
       const sameUser = document.getElementById('wizSameUser').checked;
+      const selectedContact = contacts.find(c => c.id === contactId);
+
       const wizData = {
         ...data,
         contact_id: contactId,
-        contact_name: document.getElementById('wizContactSelected')?.textContent?.trim() || '',
+        contact_name: selectedContact?.name || clientInput.value,
+        contact_person_id: personId,
         referrer_id: document.getElementById('wizRefId').value || null,
         referrer_name: document.getElementById('wizRefSelected')?.textContent?.trim() || '',
         same_end_user: sameUser,
