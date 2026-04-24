@@ -299,11 +299,11 @@ async function openContactDetail(container, contactId) {
     container.querySelector('#detailBack')?.addEventListener('click', () => renderContactList(container));
     container.querySelector('#btnEditContact')?.addEventListener('click', () => renderContactForm(container, contact));
     container.querySelector('#btnDeleteContact')?.addEventListener('click', () => {
-      showConfirm(`「${contact.name}」を削除しますか？\nこの操作は元に戻せません。`, async () => {
-        const { deleteContact } = await import('../core/db.js');
-        const ok = await deleteContact(contact.id);
-        if (ok) { showToast('削除しました'); renderContactList(container); }
-        else { showToast('削除に失敗しました'); }
+      showConfirm(`「${contact.name}」を削除済みにしますか？\nデータは残ります。一覧には表示されなくなります。`, async () => {
+        const { updateContact } = await import('../core/db.js');
+        await updateContact(contact.id, { tags: [...(contact.tags || []), '削除済み'] });
+        showToast('削除済みにしました');
+        renderContactList(container);
       });
     });
     container.querySelector('#btnAddRelation')?.addEventListener('click', () => renderRelationshipForm(container, contact));

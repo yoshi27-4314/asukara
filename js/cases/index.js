@@ -43,12 +43,12 @@ async function renderCaseList(container, activeFilter = '全て') {
   ]);
 
   function render(filter) {
-    let filtered = cases;
+    let filtered = cases.filter(c => c.status !== '削除済み'); // 削除済みは常に非表示
     if (filter !== '全て') {
-      filtered = cases.filter(c => c.status === filter);
+      filtered = filtered.filter(c => c.status === filter);
     }
 
-    const allTabs = ['全て', ...CONFIG.CASE_STATUS_FLOW, '保留', '失注', 'フォロー中'];
+    const allTabs = ['全て', ...CONFIG.CASE_STATUS_FLOW, '保留', '失注', 'フォロー中', 'アーカイブ'];
 
     container.innerHTML = `
       <div class="fade-in">
@@ -247,6 +247,7 @@ async function renderCaseDetail(container, caseId) {
           <button class="statusBtn" data-status="保留" style="flex:1;padding:8px;border:1px solid #6B7280;border-radius:8px;background:#fff;color:#6B7280;font-size:12px;cursor:pointer;">保留</button>
           <button class="statusBtn" data-status="失注" style="flex:1;padding:8px;border:1px solid #DC2626;border-radius:8px;background:#fff;color:#DC2626;font-size:12px;cursor:pointer;">失注</button>
           <button class="statusBtn" data-status="フォロー中" style="flex:1;padding:8px;border:1px solid #7C3AED;border-radius:8px;background:#fff;color:#7C3AED;font-size:12px;cursor:pointer;">フォロー中</button>
+          <button class="statusBtn" data-status="アーカイブ" style="flex:1;padding:8px;border:1px solid #9CA3AF;border-radius:8px;background:#fff;color:#9CA3AF;font-size:12px;cursor:pointer;">アーカイブ</button>
         </div>
       ` : ''}
 
@@ -272,10 +273,11 @@ async function renderCaseDetail(container, caseId) {
   container.querySelector('#btnBack')?.addEventListener('click', () => renderCaseList(container));
   container.querySelector('#btnEdit')?.addEventListener('click', () => renderCaseEdit(container, caseId));
   container.querySelector('#btnDelete')?.addEventListener('click', () => {
-    showConfirm(`「${caseData.title}」を削除しますか？\nこの操作は元に戻せません。`, async () => {
-      const ok = await deleteCase(caseId);
-      if (ok) { showToast('削除しました'); renderCaseList(container); }
-      else { showToast('削除に失敗しました'); }
+    showConfirm(`「${caseData.title}」を削除済みにしますか？\nデータは残ります。一覧には表示されなくなります。`, async () => {
+      await updateCase(caseId, { status: '削除済み' });
+      await addCaseHistory({ case_id: caseId, status: '削除済み', note: '削除済みに変更', updated_by: getCurrentStaff()?.name || null });
+      showToast('削除済みにしました');
+      renderCaseList(container);
     });
   });
   container.querySelector('#btnAssignDiv')?.addEventListener('click', () => renderDivisionAssignment(container, caseData, divisions));

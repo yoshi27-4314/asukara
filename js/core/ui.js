@@ -60,6 +60,8 @@ export function statusBadge(status) {
     '保留': '#6B7280',
     '失注': '#DC2626',
     'フォロー中': '#7C3AED',
+    'アーカイブ': '#9CA3AF',
+    '削除済み': '#D1D5DB',
   };
   const highlighted = ['同行紹介', '完了確認', '紹介獲得'];
   const color = colors[status] || '#5a6272';

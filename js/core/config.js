@@ -15,8 +15,9 @@ export const CONFIG = {
   // GAS Webhook URL（スプレッドシート同期用）
   GAS_SYNC_URL: 'https://script.google.com/macros/s/AKfycbx9JpYWvi3p0HgA9Bb0RLgEjkgzbF6iJRuAX7Ks2VL3hwIEnpuTR0J1ydtxegGKRXjh/exec',
 
-  // Case statuses (in order)
+  // Case statuses
   CASE_STATUS: {
+    // メインフロー（順番に進む、スキップ可能）
     RECEPTION: '受付',
     SITE_SURVEY: '現地調査',
     HEARING: 'ヒアリング',
@@ -25,9 +26,13 @@ export const CONFIG = {
     IN_PROGRESS: '事業部対応中',
     COMPLETION_CHECK: '完了確認',
     REFERRAL_OBTAINED: '紹介獲得',
+    // 停止（横に外れる、メインフローに戻せる）
     ON_HOLD: '保留',
-    LOST: '失注',
     FOLLOW_UP: 'フォロー中',
+    // 終了（下に落ちる、基本戻さない）
+    LOST: '失注',
+    ARCHIVED: 'アーカイブ',
+    DELETED: '削除済み',
   },
 
   CASE_STATUS_FLOW: [
