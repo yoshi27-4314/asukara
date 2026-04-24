@@ -82,6 +82,7 @@ async function renderCaseList(container, activeFilter = '全て') {
                 </div>
                 <div>${statusBadge(c.status)}</div>
               </div>
+              <span style="display:none;">${escapeHtml(c.note || '')} ${escapeHtml(c.description || '')} ${escapeHtml(c.site_address || '')}</span>
             </div>
           `).join('') : emptyState('📋', filter === '全て' ? '案件はまだありません' : `「${filter}」の案件はありません`)}
         </div>
@@ -632,18 +633,27 @@ async function renderCaseWizard(container, step = 1, data = {}) {
           document.getElementById('wizSelectedName').textContent = clientName;
 
           // この顧客に紐付く担当者を探す
-          const relatedContacts = contacts.filter(ct =>
-            ct.registered_by?.includes('担当者') &&
-            ct.tags?.some(t => t.includes('board_client_id:' + (el.dataset.clientId || '')))
-          );
+          // 顧客のタグからboard_idを取得
+          const selectedClient = contacts.find(ct => ct.id === clientId);
+          const clientBoardId = selectedClient?.tags?.find(t => t.startsWith('board_id:'))?.replace('board_id:', '') || '';
 
-          // noteからboard_idを取り出して照合する方法もある
-          const clientBoardId = contacts.find(ct => ct.id === clientId)?.tags?.find(t => t.startsWith('board_id:'))?.replace('board_id:', '') || '';
+          // 担当者はboard_client_id:XXXXのタグを持っている
+          let matchedContacts = [];
+          if (clientBoardId) {
+            matchedContacts = contacts.filter(ct =>
+              ct.registered_by === 'board移行（担当者）' &&
+              ct.tags?.some(t => t === 'board_client_id:' + clientBoardId)
+            );
+          }
 
-          const matchedContacts = contacts.filter(ct =>
-            ct.registered_by === 'board移行（担当者）' &&
-            ct.tags?.some(t => t === 'board_client_id:' + clientBoardId)
-          );
+          // タグでマッチしない場合、noteから顧客名で探す
+          if (matchedContacts.length === 0) {
+            const cName = clientName;
+            matchedContacts = contacts.filter(ct =>
+              ct.registered_by === 'board移行（担当者）' &&
+              ct.note?.includes(cName)
+            );
+          }
 
           const personSection = document.getElementById('wizContactPersonSection');
           const personSelect = document.getElementById('wizContactPerson');

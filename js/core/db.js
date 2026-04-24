@@ -54,7 +54,7 @@ export async function getContacts(filters = {}) {
   if (filters.type) query = query.eq('type', filters.type);
   if (filters.organization_id) query = query.eq('organization_id', filters.organization_id);
   if (filters.search) {
-    query = query.or(`name.ilike.%${filters.search}%,name_kana.ilike.%${filters.search}%,phone.ilike.%${filters.search}%,email.ilike.%${filters.search}%`);
+    query = query.or(`name.ilike.%${filters.search}%,name_kana.ilike.%${filters.search}%,phone.ilike.%${filters.search}%,email.ilike.%${filters.search}%,note.ilike.%${filters.search}%,position.ilike.%${filters.search}%`);
   }
 
   query = query.order('updated_at', { ascending: false, nullsFirst: false });
@@ -198,7 +198,7 @@ export async function getCases(filters = {}) {
   if (filters.staff_id) query = query.eq('staff_id', filters.staff_id);
   if (filters.contact_id) query = query.eq('contact_id', filters.contact_id);
   if (filters.search) {
-    query = query.or(`title.ilike.%${filters.search}%,description.ilike.%${filters.search}%`);
+    query = query.or(`title.ilike.%${filters.search}%,description.ilike.%${filters.search}%,note.ilike.%${filters.search}%,site_address.ilike.%${filters.search}%,category.ilike.%${filters.search}%`);
   }
 
   query = query.order('updated_at', { ascending: false, nullsFirst: false });
