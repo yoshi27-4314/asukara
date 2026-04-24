@@ -7,7 +7,8 @@ import {
   getCases, getCase, createCase, updateCase, deleteCase,
   getCaseHistory, addCaseHistory,
   getCaseDivisions, setCaseDivisions,
-  getContacts, getContact, getCaseStatusCounts
+  getContacts, getContact, getCaseStatusCounts,
+  getOrganizations
 } from '../core/db.js';
 import {
   showToast, showLoading, showConfirm, statusBadge,
@@ -511,10 +512,10 @@ function renderDivisionAssignment(container, caseData, currentDivisions) {
 async function renderCaseWizard(container, step = 1, data = {}) {
   if (step === 1) {
     // Step 1: 受付（依頼元の選択 — 顧客→支社→担当者の階層検索）
-    const contacts = await getContacts({ limit: 700 });
-    // 法人（取引先）と個人を分ける
-    const companies = contacts.filter(c => c.type === '取引先' && !c.registered_by?.includes('担当者'));
-    const persons = contacts.filter(c => c.type !== '取引先' || c.registered_by?.includes('担当者'));
+    const [contacts, orgs] = await Promise.all([
+      getContacts({ limit: 700 }),
+      getOrganizations(),
+    ]);
 
     container.innerHTML = `
       <div class="fade-in">
@@ -542,16 +543,29 @@ async function renderCaseWizard(container, step = 1, data = {}) {
 
           <!-- 選択された顧客の表示 -->
           <div id="wizSelectedInfo" style="display:${data.contact_id ? 'block' : 'none'};background:#f5f3ee;border-radius:8px;padding:12px;margin-bottom:12px;">
-            <div style="font-size:13px;font-weight:700;color:#1B3A5C;" id="wizSelectedName">${data.contact_name ? escapeHtml(data.contact_name) : ''}</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div style="font-size:14px;font-weight:700;color:#1B3A5C;" id="wizSelectedName">${data.contact_name ? escapeHtml(data.contact_name) : ''}</div>
+              <button id="wizClearClient" style="background:none;border:none;color:#DC2626;font-size:12px;cursor:pointer;">✕ 変更</button>
+            </div>
             <div id="wizSelectedDetail" style="font-size:12px;color:#5a6272;margin-top:4px;"></div>
           </div>
 
-          <!-- 担当者選択（顧客選択後に表示） -->
+          <!-- 支社選択（顧客選択後に表示） -->
+          <div id="wizBranchSection" style="display:none;">
+            <div class="form-group">
+              <label>支社・拠点</label>
+              <select id="wizBranch" style="width:100%;padding:10px;border:1px solid #D6D3CB;border-radius:8px;font-size:14px;">
+                <option value="">本社（支社なし）</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- 担当者選択（顧客 or 支社選択後に表示） -->
           <div id="wizContactPersonSection" style="display:none;">
             <div class="form-group">
-              <label>担当者（いれば選択）</label>
+              <label>担当者</label>
               <select id="wizContactPerson" style="width:100%;padding:10px;border:1px solid #D6D3CB;border-radius:8px;font-size:14px;">
-                <option value="">担当者なし</option>
+                <option value="">担当者を選択...</option>
               </select>
             </div>
           </div>
@@ -632,12 +646,27 @@ async function renderCaseWizard(container, step = 1, data = {}) {
           infoDiv.style.display = 'block';
           document.getElementById('wizSelectedName').textContent = clientName;
 
-          // この顧客に紐付く担当者を探す
-          // 顧客のタグからboard_idを取得
+          // 顧客のboard_idを取得
           const selectedClient = contacts.find(ct => ct.id === clientId);
           const clientBoardId = selectedClient?.tags?.find(t => t.startsWith('board_id:'))?.replace('board_id:', '') || '';
 
-          // 担当者はboard_client_id:XXXXのタグを持っている
+          // --- 支社を探す ---
+          const branchSection = document.getElementById('wizBranchSection');
+          const branchSelect = document.getElementById('wizBranch');
+          const matchedBranches = orgs.filter(o =>
+            o.note?.includes('board_client_id:' + clientBoardId) && clientBoardId
+          );
+
+          if (matchedBranches.length > 0) {
+            branchSection.style.display = 'block';
+            branchSelect.innerHTML = '<option value="">本社</option>' +
+              matchedBranches.map(b => `<option value="${b.id}">${escapeHtml(b.name.replace(clientName, '').trim() || b.name)}</option>`).join('');
+            document.getElementById('wizSelectedDetail').textContent = `${matchedBranches.length}拠点`;
+          } else {
+            branchSection.style.display = 'none';
+          }
+
+          // --- 担当者を探す ---
           let matchedContacts = [];
           if (clientBoardId) {
             matchedContacts = contacts.filter(ct =>
@@ -645,13 +674,10 @@ async function renderCaseWizard(container, step = 1, data = {}) {
               ct.tags?.some(t => t === 'board_client_id:' + clientBoardId)
             );
           }
-
-          // タグでマッチしない場合、noteから顧客名で探す
           if (matchedContacts.length === 0) {
-            const cName = clientName;
             matchedContacts = contacts.filter(ct =>
               ct.registered_by === 'board移行（担当者）' &&
-              ct.note?.includes(cName)
+              ct.note?.includes(clientName)
             );
           }
 
@@ -661,14 +687,27 @@ async function renderCaseWizard(container, step = 1, data = {}) {
           if (matchedContacts.length > 0) {
             personSection.style.display = 'block';
             personSelect.innerHTML = '<option value="">担当者を選択...</option>' +
-              matchedContacts.map(ct => `<option value="${ct.id}">${escapeHtml(ct.name)}${ct.position ? ' (' + escapeHtml(ct.position) + ')' : ''}</option>`).join('');
-            document.getElementById('wizSelectedDetail').textContent = `担当者 ${matchedContacts.length}名`;
+              matchedContacts.map(ct => {
+                const dept = ct.note?.match(/部署:([^/]*)/)?.[1]?.trim() || '';
+                return `<option value="${ct.id}">${escapeHtml(ct.name)}${ct.position ? ' ' + escapeHtml(ct.position) : ''}${dept ? ' (' + escapeHtml(dept) + ')' : ''}</option>`;
+              }).join('');
+            const detail = document.getElementById('wizSelectedDetail');
+            detail.textContent = (detail.textContent ? detail.textContent + ' / ' : '') + `担当者 ${matchedContacts.length}名`;
           } else {
             personSection.style.display = 'none';
-            document.getElementById('wizSelectedDetail').textContent = '';
           }
         });
       });
+    });
+
+    // 顧客クリア（変更ボタン）
+    container.querySelector('#wizClearClient')?.addEventListener('click', () => {
+      document.getElementById('wizContactId').value = '';
+      document.getElementById('wizClientSearch').value = '';
+      document.getElementById('wizSelectedInfo').style.display = 'none';
+      document.getElementById('wizBranchSection').style.display = 'none';
+      document.getElementById('wizContactPersonSection').style.display = 'none';
+      document.getElementById('wizClientSearch').focus();
     });
 
     // 紹介者・エンドユーザーの検索
