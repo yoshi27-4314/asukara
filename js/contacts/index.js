@@ -164,6 +164,8 @@ async function loadContacts(container) {
     if (currentFilter !== 'all') filters.type = currentFilter;
 
     contactsCache = await getContacts(filters);
+    // 削除済みを除外
+    contactsCache = contactsCache.filter(c => !(c.tags && c.tags.includes('削除済み')));
 
     if (contactsCache.length === 0) {
       listEl.innerHTML = emptyState('👥', searchQuery ? '該当するコンタクトがありません' : 'コンタクトがまだ登録されていません');
