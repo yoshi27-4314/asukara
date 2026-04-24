@@ -218,13 +218,17 @@ async function renderCaseDetail(container, caseId) {
         <button id="btnDelete" style="padding:6px 12px;border:1px solid #DC2626;border-radius:8px;background:#fff;color:#DC2626;cursor:pointer;font-size:13px;">削除</button>
       </div>
 
-      <!-- タイトル + ステータス -->
+      <!-- タイトル + ステータス + boardリンク -->
       <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
           <div style="font-size:18px;font-weight:700;">${escapeHtml(caseData.title)}</div>
           ${statusBadge(caseData.status)}
         </div>
         ${isSpecialStatus ? `<div style="font-size:12px;color:#DC2626;margin-bottom:8px;">※ ${caseData.status}</div>` : ''}
+        ${(() => {
+          const boardIdMatch = (caseData.note || '').match(/board_id:(\d+)/);
+          return boardIdMatch ? `<a href="https://the-board.jp/projects/${boardIdMatch[1]}/edit" target="_blank" style="display:inline-flex;align-items:center;gap:4px;padding:6px 12px;background:#0078D4;color:#fff;border-radius:6px;font-size:12px;font-weight:600;text-decoration:none;margin-top:4px;">📋 boardで開く</a>` : '';
+        })()}
       </div>
 
       <!-- ステータスフロー -->
