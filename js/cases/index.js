@@ -36,26 +36,43 @@ export function renderCases(container, params = {}) {
 // 案件一覧
 // ============================================================
 async function renderCaseList(container, activeFilter = '全て') {
-  showLoading(container, '案件を読み込み中...');
+  showLoading(container, '読み込み中...');
 
-  const [cases, statusCounts] = await Promise.all([
-    getCases({ limit: 200 }),
-    getCaseStatusCounts(),
-  ]);
+  const statusCounts = await getCaseStatusCounts();
+  // 最初は最新20件だけ取得（軽量化）
+  let currentCases = await getCases({ limit: 20 });
 
-  function render(filter) {
-    let filtered = cases.filter(c => c.status !== '削除済み'); // 削除済みは常に非表示
+  function render(filter, searchText) {
+    let filtered = currentCases.filter(c => c.status !== '削除済み');
     if (filter !== '全て') {
       filtered = filtered.filter(c => c.status === filter);
     }
 
     const allTabs = ['全て', ...CONFIG.CASE_STATUS_FLOW, '保留', '失注', 'フォロー中', 'アーカイブ'];
 
+    function renderCaseCard(c) {
+      return `
+        <div class="card" data-case-id="${c.id}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div style="flex:1;">
+              <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${escapeHtml(c.title)}</div>
+              <div style="font-size:12px;color:#5a6272;">
+                ${c.category ? escapeHtml(c.category) + ' · ' : ''}${formatDate(c.created_at)}
+                ${c.revenue ? ' · ' + formatPrice(c.revenue) : ''}
+              </div>
+            </div>
+            <div>${statusBadge(c.status)}</div>
+          </div>
+        </div>
+      `;
+    }
+
     container.innerHTML = `
       <div class="fade-in">
         <div style="display:flex;gap:8px;margin-bottom:12px;">
-          <input type="search" id="caseSearch" placeholder="案件名で検索..."
-            style="flex:1;padding:10px 12px;border:1px solid #D6D3CB;border-radius:8px;font-size:14px;background:#fff;">
+          <input type="search" id="caseSearch" placeholder="案件名・住所・内容で検索..."
+            value="${escapeHtml(searchText || '')}"
+            style="flex:1;padding:12px 14px;border:1px solid #D6D3CB;border-radius:10px;font-size:15px;background:#fff;box-shadow:0 1px 4px rgba(27,58,92,0.06);">
         </div>
 
         <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:12px;">
@@ -71,40 +88,51 @@ async function renderCaseList(container, activeFilter = '全て') {
         </div>
 
         <div id="caseListBody">
-          ${filtered.length > 0 ? filtered.map(c => `
-            <div class="card" data-case-id="${c.id}">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-                <div style="flex:1;">
-                  <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${escapeHtml(c.title)}</div>
-                  <div style="font-size:12px;color:#5a6272;">
-                    ${c.category ? escapeHtml(c.category) + ' · ' : ''}${formatDate(c.created_at)}
-                    ${c.revenue ? ' · ' + formatPrice(c.revenue) : ''}
-                  </div>
-                </div>
-                <div>${statusBadge(c.status)}</div>
-              </div>
-              <span style="display:none;">${escapeHtml(c.note || '')} ${escapeHtml(c.description || '')} ${escapeHtml(c.site_address || '')}</span>
-            </div>
-          `).join('') : emptyState('📋', filter === '全て' ? '案件はまだありません' : `「${filter}」の案件はありません`)}
+          ${filtered.length > 0 ? filtered.map(renderCaseCard).join('') :
+            emptyState('🔍', searchText ? `「${escapeHtml(searchText)}」に該当する案件はありません` : (filter === '全て' ? '最新の案件がありません' : `「${filter}」の案件はありません`))}
         </div>
+
+        ${!searchText && filter === '全て' && currentCases.length >= 20 ? `
+          <button id="btnLoadMore" style="width:100%;padding:12px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;color:#5a6272;font-size:13px;cursor:pointer;margin-top:8px;">もっと見る</button>
+        ` : ''}
       </div>
       <button class="fab" id="fabAddCase">＋</button>
     `;
 
     // イベント
     container.querySelectorAll('.filter-tab').forEach(btn => {
-      btn.addEventListener('click', () => render(btn.dataset.filter));
-    });
-    container.querySelector('#caseSearch')?.addEventListener('input', (e) => {
-      const q = e.target.value.toLowerCase();
-      const body = document.getElementById('caseListBody');
-      if (!body) return;
-      const cards = body.querySelectorAll('[data-case-id]');
-      cards.forEach(card => {
-        const text = card.textContent.toLowerCase();
-        card.style.display = text.includes(q) ? '' : 'none';
+      btn.addEventListener('click', async () => {
+        const f = btn.dataset.filter;
+        if (f !== '全て') {
+          currentCases = await getCases({ status: f, limit: 100 });
+        } else {
+          currentCases = await getCases({ limit: 20 });
+        }
+        render(f, '');
       });
     });
+
+    let searchTimer = null;
+    container.querySelector('#caseSearch')?.addEventListener('input', (e) => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(async () => {
+        const q = e.target.value.trim();
+        if (q.length >= 2) {
+          currentCases = await getCases({ search: q, limit: 50 });
+          render('全て', q);
+        } else if (q.length === 0) {
+          currentCases = await getCases({ limit: 20 });
+          render('全て', '');
+        }
+      }, 300);
+    });
+
+    container.querySelector('#btnLoadMore')?.addEventListener('click', async () => {
+      const more = await getCases({ limit: 50, offset: currentCases.length });
+      currentCases = [...currentCases, ...more];
+      render(filter, searchText);
+    });
+
     container.querySelector('#fabAddCase')?.addEventListener('click', () => renderCaseWizard(container));
     container.querySelectorAll('[data-case-id]').forEach(el => {
       el.addEventListener('click', () => renderCaseDetail(container, el.dataset.caseId));

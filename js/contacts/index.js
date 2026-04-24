@@ -84,7 +84,7 @@ async function renderContactList(container) {
       <!-- 検索バー -->
       <div style="padding:12px 16px 0;">
         <div style="position:relative;">
-          <input id="contactSearch" type="search" placeholder="名前・電話番号で検索"
+          <input id="contactSearch" type="search" placeholder="名前・電話番号・住所・メモで検索"
             value="${escapeHtml(searchQuery)}"
             style="width:100%;box-sizing:border-box;padding:10px 12px 10px 36px;border-radius:10px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;" />
           <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:${C.textMuted};font-size:16px;">🔍</span>
@@ -159,7 +159,7 @@ async function loadContacts(container) {
   showLoading(listEl);
 
   try {
-    const filters = {};
+    const filters = { limit: searchQuery ? 50 : 20 };
     if (searchQuery) filters.search = searchQuery;
     if (currentFilter !== 'all') filters.type = currentFilter;
 
