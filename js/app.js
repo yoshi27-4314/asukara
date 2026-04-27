@@ -176,6 +176,21 @@ async function renderHome() {
           </div>
         </div>
 
+        <!-- KGI -->
+        <div style="background:#fff;border-radius:12px;padding:14px;border:1px solid #B8860B40;margin-bottom:16px;">
+          <div style="font-size:12px;font-weight:700;color:#B8860B;margin-bottom:10px;">📊 KGI（月次ゴール）</div>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;">
+            <div style="text-align:center;">
+              <div style="font-size:24px;font-weight:700;color:#1B3A5C;">—</div>
+              <div style="font-size:11px;color:#8a8a8a;">月次完工売上</div>
+            </div>
+            <div style="text-align:center;">
+              <div style="font-size:24px;font-weight:700;color:#B8860B;">—</div>
+              <div style="font-size:11px;color:#8a8a8a;">紹介ネットワーク純増</div>
+            </div>
+          </div>
+        </div>
+
         <div style="font-size:13px;font-weight:700;color:#5a6272;margin-bottom:8px;">ステータス パイプライン</div>
         <div style="display:flex;gap:4px;overflow-x:auto;padding-bottom:8px;margin-bottom:16px;">${pipelineHtml}</div>
 
