@@ -203,6 +203,8 @@ async function renderCaseDetail(container, caseId) {
     <div class="fade-in">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
         <button id="btnBack" style="padding:6px 12px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;cursor:pointer;font-size:14px;">← 戻る</button>
+        <div style="flex:1;"></div>
+        <button id="btnEdit" style="padding:6px 12px;border:1px solid #B8860B;border-radius:8px;background:#fff;color:#B8860B;cursor:pointer;font-size:13px;">編集</button>
       </div>
 
       <!-- タイトル -->
@@ -303,6 +305,7 @@ async function renderCaseDetail(container, caseId) {
     });
   });
 
+  container.querySelector('#btnEdit')?.addEventListener('click', () => renderEditCase(container, caseData));
   container.querySelector('#btnAssignDiv')?.addEventListener('click', () => renderDivisionAssignment(container, caseData, divisions));
   container.querySelector('#btnAddNote')?.addEventListener('click', () => showNoteDialog(container, caseData));
 
@@ -320,6 +323,68 @@ async function renderCaseDetail(container, caseId) {
       showToast('削除済みにしました');
       renderCaseList(container);
     });
+  });
+}
+
+// ============================================================
+// 案件編集フォーム
+// ============================================================
+async function renderEditCase(container, caseData) {
+  container.innerHTML = `
+    <div class="fade-in">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+        <button id="btnBack" style="padding:6px 12px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;cursor:pointer;font-size:14px;">← 戻る</button>
+        <div style="font-size:15px;font-weight:700;">案件編集</div>
+      </div>
+
+      <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;">
+        <div class="form-group">
+          <label>困りごとの概要</label>
+          <input type="text" id="eTitle" value="${escapeHtml(caseData.title || '')}">
+        </div>
+        <div class="form-group">
+          <label>困りごとの詳細</label>
+          <textarea id="eDesc">${escapeHtml(caseData.description || '')}</textarea>
+        </div>
+        <div class="form-group">
+          <label>現地住所</label>
+          <input type="text" id="eAddress" value="${escapeHtml(caseData.site_address || '')}">
+        </div>
+        <div class="form-group">
+          <label>分類</label>
+          <select id="eCategory">
+            <option value="">未選択</option>
+            ${CONFIG.CATEGORIES.map(c => `<option value="${c.name}" ${caseData.category === c.name ? 'selected' : ''}>${c.name}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>売上金額</label>
+          <input type="number" id="eRevenue" value="${caseData.revenue || ''}">
+        </div>
+        <div class="form-group">
+          <label>メモ</label>
+          <textarea id="eNote">${escapeHtml(caseData.note || '')}</textarea>
+        </div>
+        <button id="btnSaveEdit" style="width:100%;padding:12px;border-radius:8px;background:#1B3A5C;color:#fff;border:none;font-size:14px;font-weight:600;cursor:pointer;">更新する</button>
+      </div>
+    </div>
+  `;
+
+  container.querySelector('#btnBack')?.addEventListener('click', () => renderCaseDetail(container, caseData.id));
+  container.querySelector('#btnSaveEdit')?.addEventListener('click', async () => {
+    const title = document.getElementById('eTitle').value.trim();
+    if (!title) { showToast('概要を入力してください'); return; }
+
+    await updateCase(caseData.id, {
+      title,
+      description: document.getElementById('eDesc').value.trim() || null,
+      site_address: document.getElementById('eAddress').value.trim() || null,
+      category: document.getElementById('eCategory').value || null,
+      revenue: parseInt(document.getElementById('eRevenue').value) || 0,
+      note: document.getElementById('eNote').value.trim() || null,
+    });
+    showToast('更新しました');
+    renderCaseDetail(container, caseData.id);
   });
 }
 
