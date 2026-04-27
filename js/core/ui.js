@@ -49,6 +49,15 @@ export function showConfirm(message, onConfirm, onCancel) {
 // --- ステータスバッジ ---
 export function statusBadge(status) {
   const colors = {
+    // boardのステータス
+    '受注済': '#059669',
+    '受注確定': '#D97706',
+    '見積中(高)': '#DC2626',
+    '見積中(中)': '#1B3A5C',
+    '見積中(低)': '#6B7280',
+    '見積中(除)': '#9CA3AF',
+    '失注': '#DC2626',
+    // アスカラ独自ステータス
     '受付': '#1B3A5C',
     '現地調査': '#6366F1',
     'ヒアリング': '#0D7377',
@@ -58,7 +67,6 @@ export function statusBadge(status) {
     '完了確認': '#B8860B',
     '紹介獲得': '#059669',
     '保留': '#6B7280',
-    '失注': '#DC2626',
     'フォロー中': '#7C3AED',
     'アーカイブ': '#9CA3AF',
     '削除済み': '#D1D5DB',

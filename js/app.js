@@ -61,8 +61,8 @@ function renderShell() {
         <span>ホーム</span>
       </button>
       <button class="nav-item" data-route="contacts">
-        <span class="nav-icon" style="position:relative;">👥<span class="nav-badge" id="badgeContacts" style="display:none;"></span></span>
-        <span>コンタクト</span>
+        <span class="nav-icon" style="position:relative;">🤝<span class="nav-badge" id="badgeContacts" style="display:none;"></span></span>
+        <span>人間関係</span>
       </button>
       <button class="nav-item" data-route="cases">
         <span class="nav-icon" style="position:relative;">📋<span class="nav-badge" id="badgeCases" style="display:none;"></span></span>
@@ -70,7 +70,7 @@ function renderShell() {
       </button>
       <button class="nav-item" data-route="analytics">
         <span class="nav-icon">📊</span>
-        <span>分析</span>
+        <span>貢献度</span>
       </button>
       <button class="nav-item" data-route="settings">
         <span class="nav-icon">⚙️</span>
