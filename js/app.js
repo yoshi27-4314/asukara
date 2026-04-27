@@ -116,10 +116,12 @@ async function renderHome() {
     const hour = today.getHours();
     const greeting = hour < 12 ? 'おはようございます' : hour < 18 ? 'こんにちは' : 'お疲れさまです';
 
-    // KPI
-    const totalContacts = Object.values(contactStats).reduce((a, b) => a + b, 0);
-    const activeCases = CONFIG.CASE_STATUS_FLOW.reduce((sum, s) => sum + (statusCounts[s] || 0), 0);
+    // KPI — アスカラ独自ステータスのみカウント
+    const asukaraStatuses = CONFIG.CASE_STATUS_FLOW;
+    const activeCases = asukaraStatuses.reduce((sum, s) => sum + (statusCounts[s] || 0), 0);
     const referralCount = statusCounts['紹介獲得'] || 0;
+    // 今月の新規受付数（受付ステータスの案件）
+    const newThisMonth = statusCounts['受付'] || 0;
 
     // パイプライン
     const pipelineHtml = CONFIG.CASE_STATUS_FLOW.map(status => {
@@ -161,12 +163,12 @@ async function renderHome() {
 
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px;">
           <div style="background:#fff;border-radius:12px;padding:14px;text-align:center;border:1px solid #D6D3CB;box-shadow:0 1px 4px rgba(27,58,92,0.08);">
-            <div style="font-size:28px;font-weight:700;color:#1B3A5C;">${totalContacts}</div>
-            <div style="font-size:11px;color:#8a8a8a;">コンタクト</div>
+            <div style="font-size:28px;font-weight:700;color:#1B3A5C;">${newThisMonth}</div>
+            <div style="font-size:11px;color:#8a8a8a;">新規受付</div>
           </div>
           <div style="background:#fff;border-radius:12px;padding:14px;text-align:center;border:1px solid #D6D3CB;box-shadow:0 1px 4px rgba(27,58,92,0.08);">
             <div style="font-size:28px;font-weight:700;color:#0D7377;">${activeCases}</div>
-            <div style="font-size:11px;color:#8a8a8a;">進行中案件</div>
+            <div style="font-size:11px;color:#8a8a8a;">対応中</div>
           </div>
           <div style="background:#fff;border-radius:12px;padding:14px;text-align:center;border:1px solid #D6D3CB;box-shadow:0 1px 4px rgba(27,58,92,0.08);">
             <div style="font-size:28px;font-weight:700;color:#B8860B;">${referralCount}</div>
