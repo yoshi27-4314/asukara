@@ -353,11 +353,27 @@ async function renderNewCase(container) {
         </div>
 
         <div class="form-group">
-          <label>依頼者（顧客名を入力して選択）</label>
+          <label>依頼元（顧客名を入力して選択）</label>
           <input type="text" id="fClientSearch" placeholder="美濃善、加藤、山田...">
-          <div id="fClientResults" style="max-height:150px;overflow-y:auto;margin-top:4px;"></div>
+          <div id="fClientResults" style="max-height:200px;overflow-y:auto;margin-top:4px;"></div>
           <input type="hidden" id="fContactId">
           <div id="fClientSelected" style="margin-top:4px;font-size:13px;color:#0D7377;font-weight:600;"></div>
+        </div>
+
+        <!-- 支社選択（顧客選択後に表示） -->
+        <div id="fBranchSection" style="display:none;" class="form-group">
+          <label>支社・拠点</label>
+          <select id="fBranch" style="width:100%;padding:10px;border:1px solid #D6D3CB;border-radius:8px;font-size:14px;">
+            <option value="">本社</option>
+          </select>
+        </div>
+
+        <!-- 担当者選択（顧客選択後に表示） -->
+        <div id="fPersonSection" style="display:none;" class="form-group">
+          <label>担当者</label>
+          <select id="fPerson" style="width:100%;padding:10px;border:1px solid #D6D3CB;border-radius:8px;font-size:14px;">
+            <option value="">担当者を選択...</option>
+          </select>
         </div>
 
         <div class="form-group">
@@ -383,8 +399,9 @@ async function renderNewCase(container) {
     </div>
   `;
 
-  // 顧客検索
-  _setupSearch('fClientSearch', 'fClientResults', 'fContactId', 'fClientSelected', contacts);
+  // 顧客検索（階層対応：顧客→支社→担当者）
+  _setupClientSearch(contacts, orgs);
+  // 紹介者検索
   _setupSearch('fRefSearch', 'fRefResults', 'fRefId', 'fRefSelected', contacts);
 
   container.querySelector('#btnBack')?.addEventListener('click', () => renderCaseList(container));
@@ -394,6 +411,8 @@ async function renderNewCase(container) {
     if (!title) { showToast('困りごとの概要を入力してください'); return; }
 
     const staff = getCurrentStaff();
+    const personEl = document.getElementById('fPerson');
+    const personName = personEl?.selectedOptions?.[0]?.textContent || '';
     const caseData = {
       title,
       description: document.getElementById('fDesc').value.trim() || null,
@@ -401,6 +420,7 @@ async function renderNewCase(container) {
       status: '受付',
       contact_id: document.getElementById('fContactId').value || null,
       referrer_id: document.getElementById('fRefId').value || null,
+      note: personName ? `担当者: ${personName}` : null,
     };
 
     const result = await createCase(caseData);
@@ -416,6 +436,82 @@ async function renderNewCase(container) {
     } else {
       showToast('登録に失敗しました');
     }
+  });
+}
+
+function _setupClientSearch(contacts, orgs) {
+  const input = document.getElementById('fClientSearch');
+  const results = document.getElementById('fClientResults');
+  if (!input || !results) return;
+
+  input.addEventListener('input', () => {
+    const q = input.value.toLowerCase();
+    if (!q) { results.innerHTML = ''; return; }
+
+    const matches = contacts.filter(c => {
+      const text = `${c.name || ''} ${c.name_kana || ''} ${c.note || ''}`.toLowerCase();
+      return text.includes(q) && !c.registered_by?.includes('担当者');
+    }).slice(0, 12);
+
+    results.innerHTML = matches.map(c => {
+      const typeLabel = c.type === '取引先' ? '<span style="color:#1B3A5C;font-size:10px;background:#1B3A5C14;padding:1px 6px;border-radius:8px;">法人</span>' :
+                        '<span style="color:#0D7377;font-size:10px;background:#0D737714;padding:1px 6px;border-radius:8px;">個人</span>';
+      return `
+        <div data-cid="${c.id}" data-cname="${escapeHtml(c.name)}"
+          style="padding:10px;border:1px solid #eee;border-radius:8px;margin-bottom:4px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:600;">${escapeHtml(c.name)}</span>
+          ${typeLabel}
+        </div>`;
+    }).join('') || '<div style="padding:8px;color:#8a8a8a;font-size:12px;">見つかりません</div>';
+
+    results.querySelectorAll('[data-cid]').forEach(el => {
+      el.addEventListener('click', () => {
+        const clientId = el.dataset.cid;
+        const clientName = el.dataset.cname;
+        document.getElementById('fContactId').value = clientId;
+        input.value = clientName;
+        document.getElementById('fClientSelected').textContent = clientName;
+        results.innerHTML = '';
+
+        // board_idを取得
+        const selectedClient = contacts.find(ct => ct.id === clientId);
+        const clientBoardId = selectedClient?.tags?.find(t => t.startsWith('board_id:'))?.replace('board_id:', '') || '';
+
+        // 支社を探す
+        const branchSection = document.getElementById('fBranchSection');
+        const branchSelect = document.getElementById('fBranch');
+        const matchedBranches = clientBoardId ? orgs.filter(o => o.note?.includes('board_client_id:' + clientBoardId)) : [];
+
+        if (matchedBranches.length > 0) {
+          branchSection.style.display = 'block';
+          branchSelect.innerHTML = '<option value="">本社</option>' +
+            matchedBranches.map(b => `<option value="${b.id}">${escapeHtml(b.name.replace(clientName, '').trim() || b.name)}</option>`).join('');
+        } else {
+          branchSection.style.display = 'none';
+        }
+
+        // 担当者を探す
+        const personSection = document.getElementById('fPersonSection');
+        const personSelect = document.getElementById('fPerson');
+        let matchedPersons = clientBoardId ?
+          contacts.filter(ct => ct.registered_by === 'board移行（担当者）' && ct.tags?.some(t => t === 'board_client_id:' + clientBoardId)) : [];
+
+        if (matchedPersons.length === 0) {
+          matchedPersons = contacts.filter(ct => ct.registered_by === 'board移行（担当者）' && ct.note?.includes(clientName));
+        }
+
+        if (matchedPersons.length > 0) {
+          personSection.style.display = 'block';
+          personSelect.innerHTML = '<option value="">担当者を選択...</option>' +
+            matchedPersons.map(ct => {
+              const dept = ct.note?.match(/部署:([^/]*)/)?.[1]?.trim() || '';
+              return `<option value="${ct.id}">${escapeHtml(ct.name)}${ct.position ? ' ' + escapeHtml(ct.position) : ''}${dept ? ' (' + escapeHtml(dept) + ')' : ''}</option>`;
+            }).join('');
+        } else {
+          personSection.style.display = 'none';
+        }
+      });
+    });
   });
 }
 
