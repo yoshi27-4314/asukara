@@ -343,6 +343,52 @@ export async function getContactStats() {
 }
 
 // =============================================
+// 接点記録 (ask_touchpoints)
+// =============================================
+
+export async function getTouchpoints(contactId, limit = 50) {
+  if (!db) return [];
+  const { data, error } = await db.from('ask_touchpoints')
+    .select('*')
+    .eq('contact_id', contactId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) { console.error('getTouchpoints error:', error); return []; }
+  return data || [];
+}
+
+export async function getRecentTouchpoints(limit = 20) {
+  if (!db) return [];
+  const { data, error } = await db.from('ask_touchpoints')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) { console.error('getRecentTouchpoints error:', error); return []; }
+  return data || [];
+}
+
+export async function createTouchpoint(tpData) {
+  if (!db) return null;
+  const { data, error } = await db.from('ask_touchpoints').insert(tpData).select().single();
+  if (error) { console.error('createTouchpoint error:', error); return null; }
+  return data;
+}
+
+export async function getTouchpointStats(contactId) {
+  if (!db) return { total: 0, cases: 0, referrals: 0 };
+  const { data, error } = await db.from('ask_touchpoints')
+    .select('type,case_id,referred_contact_id')
+    .eq('contact_id', contactId);
+  if (error) return { total: 0, cases: 0, referrals: 0 };
+  const items = data || [];
+  return {
+    total: items.length,
+    cases: items.filter(t => t.case_id).length,
+    referrals: items.filter(t => t.type === '紹介').length,
+  };
+}
+
+// =============================================
 // スプレッドシート同期（バックグラウンド・失敗してもアプリは止まらない）
 // =============================================
 function _syncToSheet(action, mode, data) {

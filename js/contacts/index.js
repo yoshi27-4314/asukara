@@ -1,1147 +1,693 @@
 /**
- * アスカラ - コンタクトモジュール
- * 人・組織の管理、名刺OCR、関係登録
+ * アスカラ - 人間関係モジュール
+ * 接点タイムライン中心。全ての出会い・会話・紹介が蓄積される。
  */
 import { CONFIG } from '../core/config.js';
 import {
   getContacts, getContact, createContact, updateContact,
-  getOrganizations, getOrganization, createOrganization, updateOrganization,
-  getOrgChildren, getOrgContacts,
+  getOrganizations, getOrganization, createOrganization,
+  getOrgContacts,
   getRelationships, createRelationship, deleteRelationship,
-  getCases
+  getCases,
+  getTouchpoints, getRecentTouchpoints, createTouchpoint, getTouchpointStats
 } from '../core/db.js';
-import { showToast, showLoading, showConfirm, emptyState, escapeHtml, contactTypeBadge, formatDate } from '../core/ui.js';
+import { showToast, showLoading, showConfirm, emptyState, escapeHtml, contactTypeBadge, formatDate, formatDateTime } from '../core/ui.js';
+import { getCurrentStaff } from '../core/auth.js';
 import { navigate } from '../core/router.js';
 
-// ============================================================
-//  カラーパレット
-// ============================================================
-const C = {
-  navy: '#1B3A5C',
-  teal: '#0D7377',
-  gold: '#B8860B',
-  bg: '#F5F3EE',
-  white: '#FFFFFF',
-  border: '#E0DDD5',
-  textMain: '#1B3A5C',
-  textSub: '#6B7B8D',
-  textMuted: '#9AA5B1',
-  danger: '#CE2029',
-};
+// 接点タイプ定義
+const TP_TYPES = [
+  { id: '電話', icon: '📞', color: '#1B3A5C' },
+  { id: '訪問', icon: '📍', color: '#0D7377' },
+  { id: 'メール', icon: '✉️', color: '#6366F1' },
+  { id: '紹介', icon: '🤝', color: '#B8860B' },
+  { id: '案件', icon: '📋', color: '#2563EB' },
+  { id: '入金', icon: '💰', color: '#059669' },
+  { id: 'お礼', icon: '🎁', color: '#D97706' },
+  { id: '名刺交換', icon: '📇', color: '#7C3AED' },
+  { id: 'その他', icon: '📝', color: '#6B7280' },
+];
 
 // ============================================================
-//  内部状態
-// ============================================================
-let currentView = 'list';       // list | detail | form | org_list | org_detail | org_form | relationship_form
-let currentFilter = 'all';      // all | 取引先 | 個人 | 提携士業
-let searchQuery = '';
-let contactsCache = [];
-let orgsCache = [];
-let selectedContact = null;
-let selectedOrg = null;
-let editingContact = null;      // 編集中のコンタクト（null = 新規）
-let ocrPrefill = null;          // OCR結果による事前入力
-
-// ============================================================
-//  メインエントリ
+// メインエントリ
 // ============================================================
 export function renderContacts(container, params = {}) {
-  // パラメータで直接遷移
-  if (params.contactId) {
-    openContactDetail(container, params.contactId);
-    return;
+  if (params.action === 'detail' && params.id) {
+    renderPersonDetail(container, params.id);
+  } else if (params.action === 'new') {
+    renderPersonForm(container);
+  } else if (params.action === 'record') {
+    renderRecordTouchpoint(container, params);
+  } else if (params.action === 'org' && params.id) {
+    renderOrgDetail(container, params.id);
+  } else {
+    renderTop(container);
   }
-  if (params.orgId) {
-    openOrgDetail(container, params.orgId);
-    return;
-  }
-  if (params.view === 'org_list') {
-    renderOrgList(container);
-    return;
-  }
-
-  renderContactList(container);
 }
 
 // ============================================================
-//  コンタクト一覧
+// トップ画面（最近の接点 + 検索）
 // ============================================================
-async function renderContactList(container) {
-  currentView = 'list';
-  selectedContact = null;
-  editingContact = null;
-  ocrPrefill = null;
+async function renderTop(container) {
+  showLoading(container, '読み込み中...');
+
+  const recentTPs = await getRecentTouchpoints(15);
+
+  // 接点に紐付く人の名前を取得
+  const contactCache = {};
+  for (const tp of recentTPs) {
+    if (tp.contact_id && !contactCache[tp.contact_id]) {
+      contactCache[tp.contact_id] = await getContact(tp.contact_id);
+    }
+  }
 
   container.innerHTML = `
-    <div style="background:${C.bg};min-height:100vh;">
-      <!-- ヘッダー -->
-      <div style="padding:16px 16px 0;display:flex;align-items:center;gap:8px;">
-        <button id="contactsBackHome" style="background:none;border:none;color:${C.navy};font-size:20px;cursor:pointer;padding:4px 8px;">←</button>
-        <h2 style="color:${C.navy};font-size:18px;margin:0;flex:1;">コンタクト</h2>
-        <button id="btnOrgList" style="background:none;border:1px solid ${C.teal};color:${C.teal};font-size:12px;padding:6px 12px;border-radius:8px;cursor:pointer;">組織一覧</button>
+    <div class="fade-in">
+      <!-- 検索 -->
+      <div style="margin-bottom:12px;">
+        <input type="search" id="searchInput" placeholder="名前・会社・電話で検索..."
+          style="width:100%;padding:12px 14px;border:1px solid #D6D3CB;border-radius:10px;font-size:15px;background:#fff;">
+      </div>
+      <div id="searchResults" style="display:none;margin-bottom:12px;"></div>
+
+      <!-- 最近の接点 -->
+      <div id="recentSection">
+        <div style="font-size:13px;font-weight:700;color:#5a6272;margin-bottom:8px;">最近の接点</div>
+        ${recentTPs.length > 0 ? recentTPs.map(tp => {
+          const person = contactCache[tp.contact_id];
+          const tpType = TP_TYPES.find(t => t.id === tp.type) || TP_TYPES[8];
+          return `
+            <div data-person-id="${tp.contact_id}" style="background:#fff;border-radius:10px;padding:12px;margin-bottom:6px;border:1px solid #D6D3CB;border-left:3px solid ${tpType.color};cursor:pointer;">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                <div>
+                  <span style="font-size:13px;">${tpType.icon}</span>
+                  <span style="font-weight:700;font-size:14px;margin-left:4px;">${escapeHtml(person?.name || '不明')}</span>
+                  ${person?.organization_id ? '' : ''}
+                </div>
+                <span style="font-size:11px;color:#8a8a8a;">${formatDate(tp.created_at)}</span>
+              </div>
+              ${tp.note ? `<div style="font-size:12px;color:#5a6272;margin-top:4px;margin-left:22px;">${escapeHtml(tp.note.substring(0, 60))}${tp.note.length > 60 ? '...' : ''}</div>` : ''}
+            </div>
+          `;
+        }).join('') : `
+          <div style="text-align:center;padding:40px;color:#8a8a8a;">
+            <div style="font-size:40px;margin-bottom:8px;">🤝</div>
+            <div style="font-size:14px;">接点を記録しましょう</div>
+            <div style="font-size:12px;margin-top:4px;">電話・訪問・紹介、全てが資産になります</div>
+          </div>
+        `}
       </div>
 
-      <!-- 検索バー -->
-      <div style="padding:12px 16px 0;">
-        <div style="position:relative;">
-          <input id="contactSearch" type="search" placeholder="名前・電話番号・住所・メモで検索"
-            value="${escapeHtml(searchQuery)}"
-            style="width:100%;box-sizing:border-box;padding:10px 12px 10px 36px;border-radius:10px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;" />
-          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:${C.textMuted};font-size:16px;">🔍</span>
-        </div>
-      </div>
-
-      <!-- フィルタータブ -->
-      <div style="padding:12px 16px 0;">
-        <div id="contactTabs" style="display:flex;gap:6px;overflow-x:auto;">
-          ${renderFilterTab('all', '全て')}
-          ${renderFilterTab('取引先', '取引先')}
-          ${renderFilterTab('個人', '個人')}
-          ${renderFilterTab('提携士業', '提携士業')}
-        </div>
-      </div>
-
-      <!-- コンタクトリスト -->
-      <div id="contactList" style="padding:12px 16px 120px;"></div>
-
-      <!-- FABボタン群 -->
-      <div style="position:fixed;bottom:80px;right:16px;display:flex;flex-direction:column;gap:10px;z-index:100;">
-        <button id="btnOcrRegister" style="width:52px;height:52px;border-radius:50%;background:${C.teal};color:${C.white};border:none;font-size:20px;cursor:pointer;box-shadow:0 4px 12px rgba(13,115,119,0.3);display:flex;align-items:center;justify-content:center;">📷</button>
-        <button id="btnAddContact" style="width:56px;height:56px;border-radius:50%;background:${C.navy};color:${C.white};border:none;font-size:24px;cursor:pointer;box-shadow:0 4px 12px rgba(27,58,92,0.3);display:flex;align-items:center;justify-content:center;">+</button>
+      <!-- FAB -->
+      <div style="position:fixed;bottom:80px;right:16px;display:flex;flex-direction:column;gap:10px;z-index:50;">
+        <button id="btnOcr" style="width:48px;height:48px;border-radius:50%;background:#7C3AED;color:#fff;border:none;font-size:20px;cursor:pointer;box-shadow:0 4px 12px rgba(124,58,237,0.3);display:flex;align-items:center;justify-content:center;">📷</button>
+        <button id="btnRecord" style="width:56px;height:56px;border-radius:50%;background:#B8860B;color:#fff;border:none;font-size:24px;cursor:pointer;box-shadow:0 4px 12px rgba(184,134,11,0.3);display:flex;align-items:center;justify-content:center;">＋</button>
       </div>
     </div>
   `;
 
-  // イベント
-  container.querySelector('#contactsBackHome')?.addEventListener('click', () => navigate('home'));
-
-  container.querySelector('#btnOrgList')?.addEventListener('click', () => renderOrgList(container));
-
-  container.querySelector('#contactSearch')?.addEventListener('input', (e) => {
-    searchQuery = e.target.value.trim();
-    loadContacts(container);
+  // 接点カードタップ → 人の詳細
+  container.querySelectorAll('[data-person-id]').forEach(el => {
+    el.addEventListener('click', () => renderPersonDetail(container, el.dataset.personId));
   });
 
-  container.querySelectorAll('.contact-filter-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      currentFilter = tab.dataset.filter;
-      container.querySelectorAll('.contact-filter-tab').forEach(t => {
-        t.style.background = t.dataset.filter === currentFilter ? C.navy : C.white;
-        t.style.color = t.dataset.filter === currentFilter ? C.white : C.textSub;
-      });
-      loadContacts(container);
-    });
-  });
+  // 検索
+  let searchTimer = null;
+  const searchInput = container.querySelector('#searchInput');
+  const searchResults = container.querySelector('#searchResults');
+  const recentSection = container.querySelector('#recentSection');
 
-  container.querySelector('#btnAddContact')?.addEventListener('click', () => renderContactForm(container, null));
+  searchInput?.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
+      const q = searchInput.value.trim();
+      if (q.length >= 1) {
+        const results = await getContacts({ search: q, limit: 20 });
+        const filtered = results.filter(c => !(c.tags && c.tags.includes('削除済み')));
+        searchResults.style.display = 'block';
+        recentSection.style.display = 'none';
 
-  container.querySelector('#btnOcrRegister')?.addEventListener('click', () => startOcr(container));
-
-  await loadContacts(container);
-}
-
-function renderFilterTab(key, label) {
-  const active = key === currentFilter;
-  return `<button class="contact-filter-tab" data-filter="${key}"
-    style="padding:8px 16px;border-radius:20px;border:none;font-size:13px;font-weight:bold;white-space:nowrap;cursor:pointer;
-    background:${active ? C.navy : C.white};color:${active ? C.white : C.textSub};transition:all 0.2s;">
-    ${label}
-  </button>`;
-}
-
-// ============================================================
-//  コンタクト読み込み
-// ============================================================
-async function loadContacts(container) {
-  const listEl = container.querySelector('#contactList');
-  if (!listEl) return;
-
-  showLoading(listEl);
-
-  try {
-    const filters = { limit: searchQuery ? 50 : 20 };
-    if (searchQuery) filters.search = searchQuery;
-    if (currentFilter !== 'all') filters.type = currentFilter;
-
-    contactsCache = await getContacts(filters);
-    // 削除済みを除外
-    contactsCache = contactsCache.filter(c => !(c.tags && c.tags.includes('削除済み')));
-
-    if (contactsCache.length === 0) {
-      listEl.innerHTML = emptyState('👥', searchQuery ? '該当するコンタクトがありません' : 'コンタクトがまだ登録されていません');
-      return;
-    }
-
-    listEl.innerHTML = contactsCache.map(c => renderContactCard(c)).join('');
-
-    listEl.querySelectorAll('.contact-card').forEach(card => {
-      card.addEventListener('click', () => {
-        const id = card.dataset.id;
-        if (id) openContactDetail(container, id);
-      });
-    });
-  } catch (err) {
-    console.error('コンタクト読み込みエラー:', err);
-    listEl.innerHTML = emptyState('⚠️', '読み込みに失敗しました');
-    showToast('コンタクトの読み込みに失敗しました');
-  }
-}
-
-function renderContactCard(contact) {
-  const orgName = contact.organization?.name || contact.organization_name || '';
-  const caseCount = contact.case_count ?? '';
-
-  return `
-    <div class="contact-card" data-id="${contact.id}"
-      style="background:${C.white};border-radius:12px;padding:14px;margin-bottom:8px;cursor:pointer;
-      border:1px solid ${C.border};transition:transform 0.15s;">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
-        <div style="font-size:15px;color:${C.textMain};font-weight:bold;">${escapeHtml(contact.name)}</div>
-        <div>${contactTypeBadge(contact.type)}</div>
-      </div>
-      ${orgName ? `<div style="font-size:12px;color:${C.textSub};margin-bottom:4px;">🏢 ${escapeHtml(orgName)}${contact.position ? ' / ' + escapeHtml(contact.position) : ''}</div>` : ''}
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        ${contact.phone ? `<span style="font-size:12px;color:${C.textSub};">📞 ${escapeHtml(contact.phone)}</span>` : '<span></span>'}
-        ${caseCount !== '' ? `<span style="font-size:11px;color:${C.teal};font-weight:bold;">案件 ${caseCount}件</span>` : ''}
-      </div>
-    </div>
-  `;
-}
-
-// ============================================================
-//  コンタクト詳細
-// ============================================================
-async function openContactDetail(container, contactId) {
-  currentView = 'detail';
-  showLoading(container);
-
-  try {
-    const contact = await getContact(contactId);
-    if (!contact) {
-      showToast('コンタクトが見つかりません');
-      renderContactList(container);
-      return;
-    }
-    selectedContact = contact;
-
-    // 関連データを並列取得
-    const [relationships, cases, org] = await Promise.all([
-      getRelationships(contactId),
-      getCases({ contactId }),
-      contact.organization_id ? getOrganization(contact.organization_id) : Promise.resolve(null),
-    ]);
-
-    container.innerHTML = `
-      <div style="background:${C.bg};min-height:100vh;padding-bottom:40px;">
-        <!-- ヘッダー -->
-        <div style="padding:16px;display:flex;align-items:center;gap:8px;">
-          <button id="detailBack" style="background:none;border:none;color:${C.navy};font-size:14px;cursor:pointer;padding:4px 0;">← 一覧に戻る</button>
-          <div style="flex:1;"></div>
-          <button id="btnEditContact" style="background:none;border:1px solid ${C.gold};color:${C.gold};font-size:12px;padding:6px 14px;border-radius:8px;cursor:pointer;">編集</button>
-          <button id="btnDeleteContact" style="background:none;border:1px solid #DC2626;color:#DC2626;font-size:12px;padding:6px 14px;border-radius:8px;cursor:pointer;">削除</button>
-        </div>
-
-        <!-- 基本情報 -->
-        <div style="background:${C.white};border-radius:12px;padding:16px;margin:0 16px 12px;border:1px solid ${C.border};">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <div style="font-size:20px;color:${C.textMain};font-weight:bold;">${escapeHtml(contact.name)}</div>
-            ${contactTypeBadge(contact.type)}
+        searchResults.innerHTML = filtered.length > 0 ? filtered.map(c => `
+          <div data-result-id="${c.id}" style="background:#fff;border-radius:10px;padding:12px;margin-bottom:6px;border:1px solid #D6D3CB;cursor:pointer;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <span style="font-weight:700;font-size:14px;">${escapeHtml(c.name)}</span>
+                ${c.phone ? `<span style="font-size:11px;color:#8a8a8a;margin-left:8px;">📞${escapeHtml(c.phone)}</span>` : ''}
+              </div>
+              ${contactTypeBadge(c.type)}
+            </div>
           </div>
-          ${contact.name_kana ? `<div style="font-size:12px;color:${C.textMuted};margin-bottom:8px;">${escapeHtml(contact.name_kana)}</div>` : ''}
+        `).join('') : '<div style="padding:12px;text-align:center;color:#8a8a8a;">見つかりません</div>';
 
-          <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
-            ${contact.phone ? `<div style="font-size:13px;color:${C.textSub};">📞 <a href="tel:${escapeHtml(contact.phone)}" style="color:${C.teal};text-decoration:none;">${escapeHtml(contact.phone)}</a></div>` : ''}
-            ${contact.email ? `<div style="font-size:13px;color:${C.textSub};">📧 <a href="mailto:${escapeHtml(contact.email)}" style="color:${C.teal};text-decoration:none;">${escapeHtml(contact.email)}</a></div>` : ''}
-            ${org ? `<div id="orgLink" style="font-size:13px;color:${C.textSub};cursor:pointer;">🏢 <span style="color:${C.teal};text-decoration:underline;">${escapeHtml(org.name)}</span>${contact.position ? ' / ' + escapeHtml(contact.position) : ''}</div>` : ''}
-            ${contact.note ? `<div style="font-size:13px;color:${C.textSub};margin-top:4px;padding:8px;background:${C.bg};border-radius:6px;line-height:1.5;">📝 ${escapeHtml(contact.note)}</div>` : ''}
-          </div>
-        </div>
-
-        <!-- 関係 -->
-        <div style="background:${C.white};border-radius:12px;padding:16px;margin:0 16px 12px;border:1px solid ${C.border};">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-            <h3 style="color:${C.textMain};font-size:14px;margin:0;">🔗 関係</h3>
-            <button id="btnAddRelation" style="background:none;border:1px solid ${C.teal};color:${C.teal};font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;">関係を追加</button>
-          </div>
-          <div id="relationshipList">
-            ${relationships.length > 0
-              ? relationships.map(r => {
-                  const otherContact = r.from_contact_id === contactId ? r.to_contact : r.from_contact;
-                  const otherName = otherContact?.name || '不明';
-                  return `
-                    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid ${C.border};">
-                      <div>
-                        <span style="font-size:13px;color:${C.textMain};font-weight:bold;cursor:pointer;" data-rel-contact-id="${otherContact?.id || ''}">${escapeHtml(otherName)}</span>
-                        <span style="font-size:11px;color:${C.white};background:${C.teal};padding:2px 6px;border-radius:8px;margin-left:6px;">${escapeHtml(r.type)}</span>
-                        ${r.note ? `<div style="font-size:11px;color:${C.textMuted};margin-top:2px;">${escapeHtml(r.note)}</div>` : ''}
-                      </div>
-                      <button data-del-rel="${r.id}" style="background:none;border:none;color:${C.danger};font-size:16px;cursor:pointer;padding:4px 8px;">×</button>
-                    </div>
-                  `;
-                }).join('')
-              : `<div style="color:${C.textMuted};font-size:13px;text-align:center;padding:12px;">関係が登録されていません</div>`
-            }
-          </div>
-        </div>
-
-        <!-- 案件 -->
-        <div style="background:${C.white};border-radius:12px;padding:16px;margin:0 16px 12px;border:1px solid ${C.border};">
-          <h3 style="color:${C.textMain};font-size:14px;margin:0 0 12px;">📋 案件</h3>
-          <div id="caseList">
-            ${cases.length > 0
-              ? cases.map(c => renderCaseCard(c)).join('')
-              : `<div style="color:${C.textMuted};font-size:13px;text-align:center;padding:12px;">関連する案件はありません</div>`
-            }
-          </div>
-        </div>
-      </div>
-    `;
-
-    // イベント
-    container.querySelector('#detailBack')?.addEventListener('click', () => renderContactList(container));
-    container.querySelector('#btnEditContact')?.addEventListener('click', () => renderContactForm(container, contact));
-    container.querySelector('#btnDeleteContact')?.addEventListener('click', () => {
-      showConfirm(`「${contact.name}」を削除済みにしますか？\nデータは残ります。一覧には表示されなくなります。`, async () => {
-        const { updateContact } = await import('../core/db.js');
-        await updateContact(contact.id, { tags: [...(contact.tags || []), '削除済み'] });
-        showToast('削除済みにしました');
-        renderContactList(container);
-      });
-    });
-    container.querySelector('#btnAddRelation')?.addEventListener('click', () => renderRelationshipForm(container, contact));
-
-    // 組織リンク
-    container.querySelector('#orgLink')?.addEventListener('click', () => {
-      if (org) openOrgDetail(container, org.id);
-    });
-
-    // 関係先コンタクトタップ
-    container.querySelectorAll('[data-rel-contact-id]').forEach(el => {
-      el.addEventListener('click', () => {
-        const id = el.dataset.relContactId;
-        if (id) openContactDetail(container, id);
-      });
-    });
-
-    // 関係削除
-    container.querySelectorAll('[data-del-rel]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const relId = btn.dataset.delRel;
-        showConfirm('この関係を削除しますか？', async () => {
-          try {
-            await deleteRelationship(relId);
-            showToast('関係を削除しました');
-            openContactDetail(container, contactId);
-          } catch (err) {
-            console.error('関係削除エラー:', err);
-            showToast('削除に失敗しました');
-          }
+        searchResults.querySelectorAll('[data-result-id]').forEach(el => {
+          el.addEventListener('click', () => renderPersonDetail(container, el.dataset.resultId));
         });
-      });
-    });
+      } else {
+        searchResults.style.display = 'none';
+        recentSection.style.display = 'block';
+      }
+    }, 300);
+  });
 
-    // 案件タップ
-    container.querySelectorAll('.case-mini-card').forEach(card => {
-      card.addEventListener('click', () => {
-        const caseId = card.dataset.caseId;
-        if (caseId) navigate('cases', { caseId });
-      });
-    });
-
-  } catch (err) {
-    console.error('コンタクト詳細エラー:', err);
-    showToast('詳細の読み込みに失敗しました');
-    renderContactList(container);
-  }
-}
-
-function renderCaseCard(c) {
-  const statusColors = {
-    '受付': C.navy,
-    'ヒアリング': C.navy,
-    '振り分け': C.gold,
-    '同行紹介': C.teal,
-    '事業部対応中': C.teal,
-    '完了確認': '#7B2D8E',
-    '紹介獲得': '#006B3F',
-    '保留': C.textMuted,
-    '失注': C.danger,
-    'フォロー中': C.gold,
-  };
-  const color = statusColors[c.status] || C.textSub;
-
-  return `
-    <div class="case-mini-card" data-case-id="${c.id}"
-      style="padding:10px 0;border-bottom:1px solid ${C.border};cursor:pointer;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-        <span style="font-size:13px;color:${C.textMain};font-weight:bold;">${escapeHtml(c.title || '（無題）')}</span>
-        <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;background:${color}18;color:${color};">${escapeHtml(c.status || '')}</span>
-      </div>
-      <div style="font-size:11px;color:${C.textMuted};">${formatDate(c.created_at)}</div>
-    </div>
-  `;
+  // FABボタン
+  container.querySelector('#btnRecord')?.addEventListener('click', () => renderRecordTouchpoint(container, {}));
+  container.querySelector('#btnOcr')?.addEventListener('click', () => renderOcr(container));
 }
 
 // ============================================================
-//  コンタクト登録/編集フォーム
+// 接点を記録
 // ============================================================
-async function renderContactForm(container, contact) {
-  currentView = 'form';
-  editingContact = contact;
-  const isEdit = !!contact;
-
-  // 組織一覧を取得（セレクトボックス用）
-  let allOrgs = [];
-  try {
-    allOrgs = await getOrganizations();
-  } catch { /* ignore */ }
-  orgsCache = allOrgs;
-
-  // 事前入力データ（OCR or 編集）
-  const data = ocrPrefill || contact || {};
+async function renderRecordTouchpoint(container, params = {}) {
+  const contacts = await getContacts({ limit: 700 });
+  const cases = await getCases({ limit: 50 });
 
   container.innerHTML = `
-    <div style="background:${C.bg};min-height:100vh;padding-bottom:40px;">
-      <!-- ヘッダー -->
-      <div style="padding:16px;display:flex;align-items:center;gap:8px;">
-        <button id="formBack" style="background:none;border:none;color:${C.navy};font-size:14px;cursor:pointer;padding:4px 0;">← 戻る</button>
-        <h2 style="color:${C.navy};font-size:16px;margin:0;flex:1;">${isEdit ? 'コンタクト編集' : '新規コンタクト'}</h2>
+    <div class="fade-in">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+        <button id="btnBack" style="padding:6px 12px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;cursor:pointer;">← 戻る</button>
+        <div style="font-size:15px;font-weight:700;">接点を記録</div>
       </div>
 
-      ${ocrPrefill ? `
-        <div style="margin:0 16px 12px;padding:10px 14px;background:#E8F5E9;border-radius:8px;border:1px solid #A5D6A7;font-size:12px;color:#2E7D32;">
-          📷 名刺OCRの読み取り結果です。内容を確認して保存してください。
-        </div>
-      ` : ''}
-
-      <div style="padding:0 16px;">
-        <!-- 名前（必須） -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">氏名 <span style="color:${C.danger};">*必須</span></label>
-          <input id="fName" type="text" value="${escapeHtml(data.name || '')}" placeholder="例: 田中 太郎"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:15px;outline:none;" />
+      <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;">
+        <!-- 誰と -->
+        <div class="form-group">
+          <label>誰と？ *</label>
+          <input type="text" id="tpContactSearch" placeholder="名前で検索...">
+          <div id="tpContactResults" style="max-height:150px;overflow-y:auto;margin-top:4px;"></div>
+          <input type="hidden" id="tpContactId" value="${params.contactId || ''}">
+          <div id="tpContactSelected" style="margin-top:4px;font-size:13px;color:#0D7377;font-weight:600;">${params.contactName || ''}</div>
         </div>
 
-        <!-- ふりがな -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">ふりがな</label>
-          <input id="fNameKana" type="text" value="${escapeHtml(data.name_kana || '')}" placeholder="例: たなか たろう"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;" />
-        </div>
-
-        <!-- 電話 -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">電話番号</label>
-          <input id="fPhone" type="tel" value="${escapeHtml(data.phone || '')}" placeholder="例: 058-000-0000"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;" />
-        </div>
-
-        <!-- メール -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">メール</label>
-          <input id="fEmail" type="email" value="${escapeHtml(data.email || '')}" placeholder="例: tanaka@example.com"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;" />
-        </div>
-
-        <!-- タイプ -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">タイプ</label>
-          <select id="fType"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;">
-            ${(CONFIG.CONTACT_TYPES || ['取引先', '個人', '提携士業', 'エンドユーザー', '紹介者']).map(t =>
-              `<option value="${escapeHtml(t)}" ${(data.type || '') === t ? 'selected' : ''}>${escapeHtml(t)}</option>`
-            ).join('')}
-          </select>
-        </div>
-
-        <!-- 組織 -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">所属組織</label>
-          <div style="position:relative;">
-            <input id="fOrgSearch" type="text" placeholder="組織名を検索..."
-              value="${escapeHtml(data.organization_name || (allOrgs.find(o => o.id === data.organization_id)?.name) || '')}"
-              style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;" />
-            <input id="fOrgId" type="hidden" value="${data.organization_id || ''}" />
-            <div id="orgSearchResults" style="display:none;position:absolute;top:100%;left:0;right:0;background:${C.white};border:1px solid ${C.border};border-radius:0 0 8px 8px;max-height:200px;overflow-y:auto;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>
+        <!-- 何があった -->
+        <div class="form-group">
+          <label>何があった？ *</label>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:4px;">
+            ${TP_TYPES.map(t => `
+              <button class="tpTypeBtn" data-type="${t.id}"
+                style="padding:10px 4px;border:2px solid #D6D3CB;border-radius:10px;background:#fff;cursor:pointer;text-align:center;transition:all 0.15s;">
+                <div style="font-size:20px;">${t.icon}</div>
+                <div style="font-size:10px;color:#5a6272;margin-top:2px;">${t.id}</div>
+              </button>
+            `).join('')}
           </div>
+          <input type="hidden" id="tpType">
         </div>
 
-        <!-- 役職 -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">役職</label>
-          <input id="fPosition" type="text" value="${escapeHtml(data.position || '')}" placeholder="例: 営業部長"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;" />
+        <!-- 紹介先（紹介選択時のみ） -->
+        <div id="tpReferralSection" style="display:none;" class="form-group">
+          <label>誰を紹介？</label>
+          <input type="text" id="tpRefSearch" placeholder="紹介先の名前...">
+          <div id="tpRefResults" style="max-height:120px;overflow-y:auto;margin-top:4px;"></div>
+          <input type="hidden" id="tpRefId">
+          <div id="tpRefSelected" style="margin-top:4px;font-size:13px;color:#B8860B;font-weight:600;"></div>
         </div>
 
         <!-- メモ -->
-        <div style="margin-bottom:20px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">メモ</label>
-          <textarea id="fNote" rows="3" placeholder="特記事項があれば入力"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:13px;outline:none;resize:vertical;line-height:1.5;"
-          >${escapeHtml(data.note || '')}</textarea>
+        <div class="form-group">
+          <label>メモ（任意）</label>
+          <textarea id="tpNote" placeholder="内容をメモ..." style="min-height:60px;"></textarea>
         </div>
 
-        <!-- 保存ボタン -->
-        <button id="btnSaveContact"
-          style="width:100%;padding:14px;border-radius:12px;border:none;background:${C.navy};color:${C.white};font-size:16px;font-weight:bold;cursor:pointer;margin-bottom:16px;">
-          ${isEdit ? '更新する' : '登録する'}
-        </button>
+        <!-- 案件紐付け -->
+        <div class="form-group">
+          <label>案件に紐付け（任意）</label>
+          <select id="tpCaseId" style="width:100%;padding:10px;border:1px solid #D6D3CB;border-radius:8px;font-size:14px;">
+            <option value="">紐付けない</option>
+            ${cases.filter(c => c.status !== '削除済み' && c.status !== 'アーカイブ').map(c => `
+              <option value="${c.id}">${escapeHtml(c.title)}</option>
+            `).join('')}
+          </select>
+        </div>
+
+        <button id="btnSaveTp" style="width:100%;padding:14px;border-radius:8px;background:#B8860B;color:#fff;border:none;font-size:15px;font-weight:700;cursor:pointer;">記録する</button>
       </div>
     </div>
   `;
 
-  // イベント
-  container.querySelector('#formBack')?.addEventListener('click', () => {
-    if (isEdit && selectedContact) {
-      openContactDetail(container, selectedContact.id);
-    } else {
-      renderContactList(container);
-    }
-  });
+  // 誰と検索
+  _setupSearch('tpContactSearch', 'tpContactResults', 'tpContactId', 'tpContactSelected', contacts);
+  _setupSearch('tpRefSearch', 'tpRefResults', 'tpRefId', 'tpRefSelected', contacts);
 
-  // 組織検索
-  const orgSearchInput = container.querySelector('#fOrgSearch');
-  const orgIdInput = container.querySelector('#fOrgId');
-  const orgResults = container.querySelector('#orgSearchResults');
+  // タイプ選択
+  container.querySelectorAll('.tpTypeBtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      container.querySelectorAll('.tpTypeBtn').forEach(b => { b.style.borderColor = '#D6D3CB'; b.style.background = '#fff'; });
+      const type = btn.dataset.type;
+      const tpDef = TP_TYPES.find(t => t.id === type);
+      btn.style.borderColor = tpDef?.color || '#B8860B';
+      btn.style.background = (tpDef?.color || '#B8860B') + '10';
+      document.getElementById('tpType').value = type;
 
-  orgSearchInput?.addEventListener('input', () => {
-    const q = orgSearchInput.value.trim().toLowerCase();
-    if (!q) {
-      orgResults.style.display = 'none';
-      orgIdInput.value = '';
-      return;
-    }
-    const matched = allOrgs.filter(o => o.name.toLowerCase().includes(q)).slice(0, 10);
-    if (matched.length === 0) {
-      orgResults.style.display = 'none';
-      return;
-    }
-    orgResults.style.display = 'block';
-    orgResults.innerHTML = matched.map(o =>
-      `<div data-org-id="${o.id}" style="padding:10px 12px;cursor:pointer;border-bottom:1px solid ${C.border};font-size:13px;color:${C.textMain};">${escapeHtml(o.name)}</div>`
-    ).join('');
-    orgResults.querySelectorAll('[data-org-id]').forEach(el => {
-      el.addEventListener('click', () => {
-        orgIdInput.value = el.dataset.orgId;
-        orgSearchInput.value = el.textContent.trim();
-        orgResults.style.display = 'none';
-      });
+      // 紹介の場合のみ紹介先を表示
+      document.getElementById('tpReferralSection').style.display = type === '紹介' ? 'block' : 'none';
     });
   });
 
-  orgSearchInput?.addEventListener('blur', () => {
-    setTimeout(() => { orgResults.style.display = 'none'; }, 200);
-  });
+  container.querySelector('#btnBack')?.addEventListener('click', () => renderTop(container));
 
-  // 保存
-  container.querySelector('#btnSaveContact')?.addEventListener('click', async () => {
-    const name = container.querySelector('#fName')?.value?.trim();
-    if (!name) {
-      showToast('氏名は必須です');
-      container.querySelector('#fName')?.focus();
-      return;
-    }
+  container.querySelector('#btnSaveTp')?.addEventListener('click', async () => {
+    const contactId = document.getElementById('tpContactId').value;
+    const type = document.getElementById('tpType').value;
+    if (!contactId) { showToast('相手を選んでください'); return; }
+    if (!type) { showToast('種類を選んでください'); return; }
 
-    const payload = {
-      name,
-      name_kana: container.querySelector('#fNameKana')?.value?.trim() || null,
-      phone: container.querySelector('#fPhone')?.value?.trim() || null,
-      email: container.querySelector('#fEmail')?.value?.trim() || null,
-      type: container.querySelector('#fType')?.value || null,
-      organization_id: container.querySelector('#fOrgId')?.value || null,
-      position: container.querySelector('#fPosition')?.value?.trim() || null,
-      note: container.querySelector('#fNote')?.value?.trim() || null,
+    const staff = getCurrentStaff();
+    const tpData = {
+      contact_id: contactId,
+      type,
+      note: document.getElementById('tpNote').value.trim() || null,
+      case_id: document.getElementById('tpCaseId').value || null,
+      referred_contact_id: type === '紹介' ? (document.getElementById('tpRefId').value || null) : null,
+      recorded_by: staff?.name || null,
     };
 
-    try {
-      if (isEdit) {
-        await updateContact(contact.id, payload);
-        showToast('コンタクトを更新しました');
-        ocrPrefill = null;
-        openContactDetail(container, contact.id);
+    const result = await createTouchpoint(tpData);
+    if (result) {
+      // 紹介の場合、relationshipも自動作成
+      if (type === '紹介' && tpData.referred_contact_id) {
+        await createRelationship({
+          from_contact_id: contactId,
+          to_contact_id: tpData.referred_contact_id,
+          type: '紹介',
+          note: tpData.note,
+        });
+      }
+      showToast('記録しました');
+      renderPersonDetail(container, contactId);
+    } else {
+      showToast('記録に失敗しました');
+    }
+  });
+}
+
+// ============================================================
+// 人の詳細（タイムライン中心）
+// ============================================================
+async function renderPersonDetail(container, contactId) {
+  showLoading(container, '読み込み中...');
+
+  const [person, touchpoints, relationships, stats, org] = await Promise.all([
+    getContact(contactId),
+    getTouchpoints(contactId, 30),
+    getRelationships(contactId),
+    getTouchpointStats(contactId),
+    null,
+  ]);
+
+  if (!person) {
+    container.innerHTML = emptyState('❌', '見つかりません');
+    return;
+  }
+
+  // 所属組織
+  let orgName = '';
+  if (person.organization_id) {
+    const o = await getOrganization(person.organization_id);
+    orgName = o?.name || '';
+  }
+
+  // 関係先の名前取得
+  const relContacts = [];
+  for (const rel of relationships) {
+    const otherId = rel.from_contact_id === contactId ? rel.to_contact_id : rel.from_contact_id;
+    const other = await getContact(otherId);
+    if (other) {
+      const direction = rel.from_contact_id === contactId ? '→' : '←';
+      relContacts.push({ ...rel, otherName: other.name, otherId, direction });
+    }
+  }
+
+  // 関連案件
+  const cases = await getCases({ contact_id: contactId, limit: 5 });
+
+  container.innerHTML = `
+    <div class="fade-in">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <button id="btnBack" style="padding:6px 12px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;cursor:pointer;">← 戻る</button>
+        <div style="flex:1;"></div>
+        <button id="btnEdit" style="padding:6px 12px;border:1px solid #B8860B;border-radius:8px;background:#fff;color:#B8860B;cursor:pointer;font-size:13px;">編集</button>
+        <button id="btnDelete" style="padding:6px 12px;border:1px solid #DC2626;border-radius:8px;background:#fff;color:#DC2626;cursor:pointer;font-size:13px;">削除</button>
+      </div>
+
+      <!-- 基本情報 -->
+      <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;margin-bottom:12px;">
+        <div style="font-size:20px;font-weight:700;margin-bottom:4px;">${escapeHtml(person.name)}</div>
+        ${orgName ? `<div style="font-size:13px;color:#0D7377;margin-bottom:4px;cursor:pointer;" id="orgLink">🏢 ${escapeHtml(orgName)}${person.position ? ' · ' + escapeHtml(person.position) : ''}</div>` : ''}
+        ${person.phone ? `<div style="font-size:13px;color:#5a6272;">📞 ${escapeHtml(person.phone)}</div>` : ''}
+        ${person.email ? `<div style="font-size:13px;color:#5a6272;">✉️ ${escapeHtml(person.email)}</div>` : ''}
+      </div>
+
+      <!-- この人の数字 -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">
+        <div style="background:#fff;border-radius:10px;padding:12px;text-align:center;border:1px solid #D6D3CB;">
+          <div style="font-size:22px;font-weight:700;color:#1B3A5C;">${stats.total}</div>
+          <div style="font-size:10px;color:#8a8a8a;">接点</div>
+        </div>
+        <div style="background:#fff;border-radius:10px;padding:12px;text-align:center;border:1px solid #D6D3CB;">
+          <div style="font-size:22px;font-weight:700;color:#0D7377;">${cases.length}</div>
+          <div style="font-size:10px;color:#8a8a8a;">案件</div>
+        </div>
+        <div style="background:#fff;border-radius:10px;padding:12px;text-align:center;border:1px solid #D6D3CB;">
+          <div style="font-size:22px;font-weight:700;color:#B8860B;">${stats.referrals}</div>
+          <div style="font-size:10px;color:#8a8a8a;">紹介</div>
+        </div>
+      </div>
+
+      <!-- タイムライン -->
+      <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;margin-bottom:12px;">
+        <div style="font-size:13px;font-weight:700;color:#5a6272;margin-bottom:10px;">🕐 タイムライン</div>
+        ${touchpoints.length > 0 ? touchpoints.map(tp => {
+          const tpDef = TP_TYPES.find(t => t.id === tp.type) || TP_TYPES[8];
+          return `
+            <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #f0f0f0;">
+              <div style="width:28px;height:28px;border-radius:50%;background:${tpDef.color}14;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;">${tpDef.icon}</div>
+              <div style="flex:1;">
+                <div style="font-size:12px;color:#8a8a8a;">${formatDateTime(tp.created_at)} · ${escapeHtml(tp.type)}</div>
+                ${tp.note ? `<div style="font-size:13px;margin-top:2px;">${escapeHtml(tp.note)}</div>` : ''}
+              </div>
+            </div>
+          `;
+        }).join('') : '<div style="font-size:12px;color:#8a8a8a;text-align:center;padding:12px;">接点はまだ記録されていません</div>'}
+      </div>
+
+      <!-- つながり -->
+      <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;margin-bottom:12px;">
+        <div style="font-size:13px;font-weight:700;color:#B8860B;margin-bottom:10px;">🤝 つながり</div>
+        ${relContacts.length > 0 ? relContacts.map(r => `
+          <div data-rel-person="${r.otherId}" style="padding:8px 0;border-bottom:1px solid #f0f0f0;cursor:pointer;">
+            <span style="font-weight:600;">${escapeHtml(r.otherName)}</span>
+            <span style="font-size:11px;color:#B8860B;margin-left:6px;">${r.direction} ${escapeHtml(r.type)}</span>
+          </div>
+        `).join('') : '<div style="font-size:12px;color:#8a8a8a;">つながりはまだありません</div>'}
+        <button id="btnAddRel" style="width:100%;padding:8px;border:1px dashed #D6D3CB;border-radius:8px;background:transparent;color:#0D7377;font-size:12px;cursor:pointer;margin-top:8px;">＋ つながりを追加</button>
+      </div>
+
+      <!-- この人との接点を記録 -->
+      <button id="btnRecordTp" style="width:100%;padding:14px;border-radius:8px;background:#B8860B;color:#fff;border:none;font-size:15px;font-weight:700;cursor:pointer;margin-bottom:16px;">＋ この人との接点を記録</button>
+    </div>
+  `;
+
+  // イベント
+  container.querySelector('#btnBack')?.addEventListener('click', () => renderTop(container));
+  container.querySelector('#btnEdit')?.addEventListener('click', () => renderPersonForm(container, person));
+  container.querySelector('#btnDelete')?.addEventListener('click', () => {
+    showConfirm(`「${person.name}」を削除済みにしますか？`, async () => {
+      await updateContact(person.id, { tags: [...(person.tags || []), '削除済み'] });
+      showToast('削除済みにしました');
+      renderTop(container);
+    });
+  });
+  container.querySelector('#orgLink')?.addEventListener('click', () => {
+    if (person.organization_id) renderOrgDetail(container, person.organization_id);
+  });
+  container.querySelectorAll('[data-rel-person]').forEach(el => {
+    el.addEventListener('click', () => renderPersonDetail(container, el.dataset.relPerson));
+  });
+  container.querySelector('#btnAddRel')?.addEventListener('click', () => renderAddRelationship(container, person));
+  container.querySelector('#btnRecordTp')?.addEventListener('click', () => {
+    renderRecordTouchpoint(container, { contactId: person.id, contactName: person.name });
+  });
+}
+
+// ============================================================
+// 人の登録/編集
+// ============================================================
+async function renderPersonForm(container, existing = null) {
+  const orgs = await getOrganizations();
+  const isEdit = !!existing;
+
+  container.innerHTML = `
+    <div class="fade-in">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+        <button id="btnBack" style="padding:6px 12px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;cursor:pointer;">← 戻る</button>
+        <div style="font-size:15px;font-weight:700;">${isEdit ? '編集' : '新しい人を登録'}</div>
+      </div>
+      <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;">
+        <div class="form-group">
+          <label>氏名 *</label>
+          <input type="text" id="fName" value="${escapeHtml(existing?.name || '')}" placeholder="山田 太郎">
+        </div>
+        <div class="form-group">
+          <label>ふりがな</label>
+          <input type="text" id="fKana" value="${escapeHtml(existing?.name_kana || '')}" placeholder="やまだ たろう">
+        </div>
+        <div class="form-group">
+          <label>種類</label>
+          <select id="fType">
+            ${CONFIG.CONTACT_TYPES.map(t => `<option value="${t}" ${existing?.type === t ? 'selected' : ''}>${t}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>電話番号</label>
+          <input type="tel" id="fPhone" value="${escapeHtml(existing?.phone || '')}" placeholder="090-1234-5678">
+        </div>
+        <div class="form-group">
+          <label>メール</label>
+          <input type="email" id="fEmail" value="${escapeHtml(existing?.email || '')}" placeholder="example@email.com">
+        </div>
+        <div class="form-group">
+          <label>所属組織</label>
+          <select id="fOrg">
+            <option value="">なし</option>
+            ${orgs.map(o => `<option value="${o.id}" ${existing?.organization_id === o.id ? 'selected' : ''}>${escapeHtml(o.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>役職</label>
+          <input type="text" id="fPosition" value="${escapeHtml(existing?.position || '')}" placeholder="部長">
+        </div>
+        <div class="form-group">
+          <label>メモ</label>
+          <textarea id="fNote" placeholder="備考...">${escapeHtml(existing?.note || '')}</textarea>
+        </div>
+        <button id="btnSave" style="width:100%;padding:12px;border-radius:8px;background:#1B3A5C;color:#fff;border:none;font-size:14px;font-weight:600;cursor:pointer;">${isEdit ? '更新する' : '登録する'}</button>
+      </div>
+    </div>
+  `;
+
+  container.querySelector('#btnBack')?.addEventListener('click', () => {
+    if (isEdit) renderPersonDetail(container, existing.id);
+    else renderTop(container);
+  });
+
+  container.querySelector('#btnSave')?.addEventListener('click', async () => {
+    const name = document.getElementById('fName').value.trim();
+    if (!name) { showToast('氏名は必須です'); return; }
+    const data = {
+      name,
+      name_kana: document.getElementById('fKana').value.trim() || null,
+      type: document.getElementById('fType').value,
+      phone: document.getElementById('fPhone').value.trim() || null,
+      email: document.getElementById('fEmail').value.trim() || null,
+      organization_id: document.getElementById('fOrg').value || null,
+      position: document.getElementById('fPosition').value.trim() || null,
+      note: document.getElementById('fNote').value.trim() || null,
+    };
+    if (!isEdit) data.registered_by = getCurrentStaff()?.name || null;
+
+    if (isEdit) {
+      await updateContact(existing.id, data);
+      showToast('更新しました');
+      renderPersonDetail(container, existing.id);
+    } else {
+      const result = await createContact(data);
+      if (result) {
+        showToast('登録しました');
+        renderPersonDetail(container, result.id);
       } else {
-        const newContact = await createContact(payload);
-        showToast('コンタクトを登録しました');
-        ocrPrefill = null;
-        if (newContact?.id) {
-          openContactDetail(container, newContact.id);
-        } else {
-          renderContactList(container);
-        }
+        showToast('登録に失敗しました');
       }
-    } catch (err) {
-      console.error('コンタクト保存エラー:', err);
-      showToast(isEdit ? '更新に失敗しました' : '登録に失敗しました');
     }
   });
 }
 
 // ============================================================
-//  名刺OCR
+// 組織詳細
 // ============================================================
-async function startOcr(container) {
-  // カメラ/ギャラリーから画像を選択
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = 'image/*';
-  input.capture = 'environment';
+async function renderOrgDetail(container, orgId) {
+  showLoading(container, '読み込み中...');
+  const [org, members] = await Promise.all([
+    getOrganization(orgId),
+    getOrgContacts(orgId),
+  ]);
+  if (!org) { container.innerHTML = emptyState('❌', '組織が見つかりません'); return; }
 
-  input.addEventListener('change', async () => {
-    const file = input.files?.[0];
+  container.innerHTML = `
+    <div class="fade-in">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <button id="btnBack" style="padding:6px 12px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;cursor:pointer;">← 戻る</button>
+      </div>
+      <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;margin-bottom:12px;">
+        <div style="font-size:18px;font-weight:700;">🏢 ${escapeHtml(org.name)}</div>
+        ${org.address ? `<div style="font-size:13px;color:#5a6272;margin-top:4px;">📍 ${escapeHtml(org.address)}</div>` : ''}
+        ${org.phone ? `<div style="font-size:13px;color:#5a6272;">📞 ${escapeHtml(org.phone)}</div>` : ''}
+      </div>
+      <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;">
+        <div style="font-size:13px;font-weight:700;color:#5a6272;margin-bottom:8px;">👥 所属メンバー（${members.length}人）</div>
+        ${members.length > 0 ? members.map(m => `
+          <div data-member-id="${m.id}" style="padding:8px 0;border-bottom:1px solid #f0f0f0;cursor:pointer;">
+            <span style="font-weight:600;">${escapeHtml(m.name)}</span>
+            ${m.position ? `<span style="font-size:11px;color:#8a8a8a;margin-left:8px;">${escapeHtml(m.position)}</span>` : ''}
+          </div>
+        `).join('') : '<div style="font-size:12px;color:#8a8a8a;">メンバーはいません</div>'}
+      </div>
+    </div>
+  `;
+
+  container.querySelector('#btnBack')?.addEventListener('click', () => renderTop(container));
+  container.querySelectorAll('[data-member-id]').forEach(el => {
+    el.addEventListener('click', () => renderPersonDetail(container, el.dataset.memberId));
+  });
+}
+
+// ============================================================
+// つながり追加
+// ============================================================
+async function renderAddRelationship(container, fromPerson) {
+  const contacts = await getContacts({ limit: 500 });
+
+  container.innerHTML = `
+    <div class="fade-in">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+        <button id="btnBack" style="padding:6px 12px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;cursor:pointer;">← 戻る</button>
+        <div style="font-size:15px;font-weight:700;">つながりを追加</div>
+      </div>
+      <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;">
+        <div style="font-size:13px;color:#5a6272;margin-bottom:12px;"><strong>${escapeHtml(fromPerson.name)}</strong> と...</div>
+        <div class="form-group">
+          <label>相手 *</label>
+          <input type="text" id="relSearch" placeholder="名前で検索...">
+          <div id="relResults" style="max-height:150px;overflow-y:auto;margin-top:4px;"></div>
+          <input type="hidden" id="relToId">
+        </div>
+        <div class="form-group">
+          <label>関係</label>
+          <select id="relType">
+            ${CONFIG.RELATIONSHIP_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>メモ（任意）</label>
+          <textarea id="relNote" placeholder="関係の詳細..."></textarea>
+        </div>
+        <button id="btnSaveRel" style="width:100%;padding:12px;border-radius:8px;background:#1B3A5C;color:#fff;border:none;font-size:14px;font-weight:600;cursor:pointer;">登録する</button>
+      </div>
+    </div>
+  `;
+
+  _setupSearch('relSearch', 'relResults', 'relToId', null, contacts.filter(c => c.id !== fromPerson.id));
+
+  container.querySelector('#btnBack')?.addEventListener('click', () => renderPersonDetail(container, fromPerson.id));
+  container.querySelector('#btnSaveRel')?.addEventListener('click', async () => {
+    const toId = document.getElementById('relToId').value;
+    if (!toId) { showToast('相手を選んでください'); return; }
+    const result = await createRelationship({
+      from_contact_id: fromPerson.id,
+      to_contact_id: toId,
+      type: document.getElementById('relType').value,
+      note: document.getElementById('relNote').value.trim() || null,
+    });
+    if (result) {
+      showToast('登録しました');
+      renderPersonDetail(container, fromPerson.id);
+    } else {
+      showToast('登録に失敗しました');
+    }
+  });
+}
+
+// ============================================================
+// 名刺OCR
+// ============================================================
+function renderOcr(container) {
+  container.innerHTML = `
+    <div class="fade-in">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+        <button id="btnBack" style="padding:6px 12px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;cursor:pointer;">← 戻る</button>
+        <div style="font-size:15px;font-weight:700;">📷 名刺スキャン</div>
+      </div>
+      <div style="background:#fff;border-radius:12px;padding:16px;border:1px solid #D6D3CB;text-align:center;">
+        <p style="font-size:13px;color:#5a6272;margin-bottom:16px;">名刺の写真を撮影または選択</p>
+        <input type="file" id="ocrInput" accept="image/*" capture="environment" style="display:none;">
+        <button id="btnCapture" style="padding:14px 24px;border-radius:8px;background:#7C3AED;color:#fff;border:none;font-size:14px;font-weight:600;cursor:pointer;">📷 撮影 / 選択</button>
+        <div id="ocrPreview" style="margin-top:16px;"></div>
+        <div id="ocrResult" style="margin-top:16px;"></div>
+      </div>
+    </div>
+  `;
+
+  container.querySelector('#btnBack')?.addEventListener('click', () => renderTop(container));
+  container.querySelector('#btnCapture')?.addEventListener('click', () => document.getElementById('ocrInput')?.click());
+
+  container.querySelector('#ocrInput')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
     if (!file) return;
-
-    showLoading(container, '名刺を読み取り中...');
-
-    try {
-      // ファイルをbase64に変換
-      const base64 = await fileToBase64(file);
-
-      // OCR API呼び出し
-      const res = await fetch(CONFIG.AWAI_URL + '/functions/v1/ocr', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${CONFIG.AWAI_KEY}`,
-        },
-        body: JSON.stringify({
-          image: base64,
-          type: 'business_card',
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`OCR API Error: ${res.status}`);
-      }
-
-      const result = await res.json();
-
-      // OCR結果をパース
-      const parsed = parseOcrResult(result);
-
-      if (!parsed.name && !parsed.phone && !parsed.email) {
-        showToast('名刺の情報を読み取れませんでした。手入力してください。');
-        renderContactForm(container, null);
-        return;
-      }
-
-      showToast('名刺を読み取りました。内容を確認してください。');
-
-      // OCR結果で事前入力してフォームを開く
-      ocrPrefill = parsed;
-      renderContactForm(container, null);
-
-    } catch (err) {
-      console.error('OCRエラー:', err);
-      showToast('名刺の読み取りに失敗しました');
-      renderContactList(container);
-    }
-  });
-
-  input.click();
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
+    reader.onload = async (ev) => {
+      document.getElementById('ocrPreview').innerHTML = `<img src="${ev.target.result}" style="max-width:100%;border-radius:8px;">`;
+      document.getElementById('ocrResult').innerHTML = '<div style="color:#5a6272;">読み取り中...</div>';
+      try {
+        const base64 = ev.target.result.split(',')[1];
+        const response = await fetch(CONFIG.AWAI_URL + '/functions/v1/ocr', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + CONFIG.AWAI_KEY },
+          body: JSON.stringify({ image: base64, type: 'business_card' }),
+        });
+        if (!response.ok) throw new Error('OCR failed');
+        const ocrData = await response.json();
+        if (ocrData) {
+          const prefill = {
+            name: ocrData.name || '', name_kana: ocrData.name_kana || '',
+            phone: ocrData.phone || '', email: ocrData.email || '',
+            position: ocrData.position || ocrData.title || '', type: '取引先',
+            note: ocrData.company ? `会社: ${ocrData.company}` : '',
+          };
+          document.getElementById('ocrResult').innerHTML = `
+            <div style="text-align:left;background:#f5f3ee;padding:12px;border-radius:8px;margin-bottom:12px;">
+              ${Object.entries(prefill).filter(([,v]) => v).map(([k,v]) => `<div style="font-size:12px;"><strong>${k}:</strong> ${escapeHtml(v)}</div>`).join('')}
+            </div>
+            <button id="btnUseOcr" style="width:100%;padding:12px;border-radius:8px;background:#1B3A5C;color:#fff;border:none;font-size:14px;font-weight:600;cursor:pointer;">この内容で登録</button>
+          `;
+          document.getElementById('btnUseOcr')?.addEventListener('click', () => renderPersonForm(container, prefill));
+        }
+      } catch (err) {
+        document.getElementById('ocrResult').innerHTML = `
+          <div style="color:#DC2626;">読み取りに失敗しました</div>
+          <button id="btnManual" style="margin-top:8px;padding:10px;border:1px solid #D6D3CB;border-radius:8px;background:#fff;cursor:pointer;">手入力で登録</button>
+        `;
+        document.getElementById('btnManual')?.addEventListener('click', () => renderPersonForm(container));
+      }
+    };
     reader.readAsDataURL(file);
   });
 }
 
-function parseOcrResult(result) {
-  // OCR結果の形式は Edge Function の実装次第
-  // 一般的なフィールドをマッピング
-  const data = result.data || result.result || result;
-
-  return {
-    name: data.name || data.full_name || data.氏名 || '',
-    name_kana: data.name_kana || data.furigana || data.ふりがな || '',
-    phone: data.phone || data.tel || data.電話番号 || '',
-    email: data.email || data.メール || '',
-    position: data.position || data.title || data.役職 || '',
-    organization_name: data.company || data.organization || data.会社名 || '',
-    type: '取引先',
-    note: data.address ? `住所: ${data.address}` : '',
-  };
-}
-
 // ============================================================
-//  組織一覧
+// 検索ヘルパー
 // ============================================================
-async function renderOrgList(container) {
-  currentView = 'org_list';
-
-  container.innerHTML = `
-    <div style="background:${C.bg};min-height:100vh;">
-      <!-- ヘッダー -->
-      <div style="padding:16px;display:flex;align-items:center;gap:8px;">
-        <button id="orgListBack" style="background:none;border:none;color:${C.navy};font-size:14px;cursor:pointer;padding:4px 0;">← コンタクトに戻る</button>
-        <div style="flex:1;"></div>
-        <button id="btnAddOrg" style="background:${C.teal};color:${C.white};border:none;font-size:12px;padding:6px 14px;border-radius:8px;cursor:pointer;">+ 組織登録</button>
+function _setupSearch(inputId, resultsId, hiddenId, selectedId, contacts) {
+  const input = document.getElementById(inputId);
+  const results = document.getElementById(resultsId);
+  if (!input || !results) return;
+  input.addEventListener('input', () => {
+    const q = input.value.toLowerCase();
+    if (!q) { results.innerHTML = ''; return; }
+    const matches = contacts.filter(c => {
+      const text = `${c.name || ''} ${c.name_kana || ''} ${c.note || ''}`.toLowerCase();
+      return text.includes(q) && !(c.tags && c.tags.includes('削除済み'));
+    }).slice(0, 10);
+    results.innerHTML = matches.map(c => `
+      <div data-sel-id="${c.id}" data-sel-name="${escapeHtml(c.name)}" style="padding:8px 10px;border:1px solid #eee;border-radius:6px;margin-bottom:4px;cursor:pointer;font-size:13px;">
+        ${escapeHtml(c.name)} <span style="color:#8a8a8a;font-size:11px;">${escapeHtml(c.type || '')}</span>
       </div>
-
-      <div style="padding:0 16px;">
-        <h2 style="color:${C.navy};font-size:16px;margin:0 0 12px;">🏢 組織管理</h2>
-      </div>
-
-      <div id="orgTreeContainer" style="padding:0 16px 100px;"></div>
-    </div>
-  `;
-
-  container.querySelector('#orgListBack')?.addEventListener('click', () => renderContactList(container));
-  container.querySelector('#btnAddOrg')?.addEventListener('click', () => renderOrgForm(container, null));
-
-  await loadOrgTree(container);
-}
-
-async function loadOrgTree(container) {
-  const treeEl = container.querySelector('#orgTreeContainer');
-  if (!treeEl) return;
-
-  showLoading(treeEl);
-
-  try {
-    const allOrgs = await getOrganizations();
-    orgsCache = allOrgs;
-
-    if (allOrgs.length === 0) {
-      treeEl.innerHTML = emptyState('🏢', '組織がまだ登録されていません');
-      return;
-    }
-
-    // ツリー構造を構築（parent_id が null のものがルート）
-    const roots = allOrgs.filter(o => !o.parent_id);
-    const childMap = {};
-    allOrgs.forEach(o => {
-      if (o.parent_id) {
-        if (!childMap[o.parent_id]) childMap[o.parent_id] = [];
-        childMap[o.parent_id].push(o);
-      }
-    });
-
-    function renderOrgNode(org, depth = 0) {
-      const children = childMap[org.id] || [];
-      const indent = depth * 20;
-      const typeLabel = org.type ? `<span style="font-size:10px;color:${C.teal};margin-left:6px;">${escapeHtml(org.type)}</span>` : '';
-
-      let html = `
-        <div class="org-node" data-org-id="${org.id}"
-          style="background:${C.white};border-radius:8px;padding:12px 14px;margin-bottom:6px;margin-left:${indent}px;
-          border:1px solid ${C.border};cursor:pointer;transition:transform 0.15s;">
-          <div style="display:flex;align-items:center;gap:6px;">
-            <span style="font-size:14px;">${depth === 0 ? '🏢' : depth === 1 ? '🏬' : '📁'}</span>
-            <span style="font-size:14px;color:${C.textMain};font-weight:bold;">${escapeHtml(org.name)}</span>
-            ${typeLabel}
-          </div>
-          ${org.phone ? `<div style="font-size:11px;color:${C.textMuted};margin-top:4px;margin-left:26px;">📞 ${escapeHtml(org.phone)}</div>` : ''}
-        </div>
-      `;
-
-      children.forEach(child => {
-        html += renderOrgNode(child, depth + 1);
-      });
-
-      return html;
-    }
-
-    treeEl.innerHTML = roots.map(r => renderOrgNode(r)).join('');
-
-    // ルートでない孤立した組織も表示
-    const renderedIds = new Set();
-    function collectIds(org) {
-      renderedIds.add(org.id);
-      (childMap[org.id] || []).forEach(c => collectIds(c));
-    }
-    roots.forEach(r => collectIds(r));
-
-    const orphans = allOrgs.filter(o => !renderedIds.has(o.id));
-    if (orphans.length > 0) {
-      treeEl.innerHTML += orphans.map(o => renderOrgNode(o)).join('');
-    }
-
-    treeEl.querySelectorAll('.org-node').forEach(node => {
-      node.addEventListener('click', () => {
-        const orgId = node.dataset.orgId;
-        if (orgId) openOrgDetail(container, orgId);
-      });
-    });
-
-  } catch (err) {
-    console.error('組織読み込みエラー:', err);
-    treeEl.innerHTML = emptyState('⚠️', '組織の読み込みに失敗しました');
-  }
-}
-
-// ============================================================
-//  組織詳細
-// ============================================================
-async function openOrgDetail(container, orgId) {
-  currentView = 'org_detail';
-  showLoading(container);
-
-  try {
-    const [org, children, contacts] = await Promise.all([
-      getOrganization(orgId),
-      getOrgChildren(orgId),
-      getOrgContacts(orgId),
-    ]);
-
-    if (!org) {
-      showToast('組織が見つかりません');
-      renderOrgList(container);
-      return;
-    }
-    selectedOrg = org;
-
-    container.innerHTML = `
-      <div style="background:${C.bg};min-height:100vh;padding-bottom:40px;">
-        <!-- ヘッダー -->
-        <div style="padding:16px;display:flex;align-items:center;gap:8px;">
-          <button id="orgDetailBack" style="background:none;border:none;color:${C.navy};font-size:14px;cursor:pointer;padding:4px 0;">← 組織一覧に戻る</button>
-          <div style="flex:1;"></div>
-          <button id="btnEditOrg" style="background:none;border:1px solid ${C.gold};color:${C.gold};font-size:12px;padding:6px 14px;border-radius:8px;cursor:pointer;">編集</button>
-        </div>
-
-        <!-- 基本情報 -->
-        <div style="background:${C.white};border-radius:12px;padding:16px;margin:0 16px 12px;border:1px solid ${C.border};">
-          <div style="font-size:20px;color:${C.textMain};font-weight:bold;margin-bottom:8px;">🏢 ${escapeHtml(org.name)}</div>
-          ${org.type ? `<div style="font-size:12px;color:${C.teal};margin-bottom:6px;">${escapeHtml(org.type)}</div>` : ''}
-          ${org.address ? `<div style="font-size:13px;color:${C.textSub};margin-bottom:4px;">📍 ${escapeHtml(org.address)}</div>` : ''}
-          ${org.phone ? `<div style="font-size:13px;color:${C.textSub};">📞 ${escapeHtml(org.phone)}</div>` : ''}
-        </div>
-
-        <!-- 子組織 -->
-        <div style="background:${C.white};border-radius:12px;padding:16px;margin:0 16px 12px;border:1px solid ${C.border};">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-            <h3 style="color:${C.textMain};font-size:14px;margin:0;">📁 下部組織</h3>
-            <button id="btnAddChildOrg" style="background:none;border:1px solid ${C.teal};color:${C.teal};font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;">+ 追加</button>
-          </div>
-          ${children.length > 0
-            ? children.map(c => `
-              <div class="child-org" data-child-org-id="${c.id}" style="padding:10px 0;border-bottom:1px solid ${C.border};cursor:pointer;">
-                <div style="font-size:14px;color:${C.textMain};font-weight:bold;">${escapeHtml(c.name)}</div>
-                ${c.type ? `<div style="font-size:11px;color:${C.textMuted};">${escapeHtml(c.type)}</div>` : ''}
-              </div>
-            `).join('')
-            : `<div style="color:${C.textMuted};font-size:13px;text-align:center;padding:12px;">下部組織はありません</div>`
-          }
-        </div>
-
-        <!-- 所属コンタクト -->
-        <div style="background:${C.white};border-radius:12px;padding:16px;margin:0 16px 12px;border:1px solid ${C.border};">
-          <h3 style="color:${C.textMain};font-size:14px;margin:0 0 12px;">👥 所属コンタクト</h3>
-          ${contacts.length > 0
-            ? contacts.map(c => `
-              <div class="org-contact" data-contact-id="${c.id}" style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid ${C.border};cursor:pointer;">
-                <div>
-                  <div style="font-size:14px;color:${C.textMain};font-weight:bold;">${escapeHtml(c.name)}</div>
-                  ${c.position ? `<div style="font-size:11px;color:${C.textMuted};">${escapeHtml(c.position)}</div>` : ''}
-                </div>
-                ${contactTypeBadge(c.type)}
-              </div>
-            `).join('')
-            : `<div style="color:${C.textMuted};font-size:13px;text-align:center;padding:12px;">所属するコンタクトはいません</div>`
-          }
-        </div>
-      </div>
-    `;
-
-    // イベント
-    container.querySelector('#orgDetailBack')?.addEventListener('click', () => renderOrgList(container));
-    container.querySelector('#btnEditOrg')?.addEventListener('click', () => renderOrgForm(container, org));
-    container.querySelector('#btnAddChildOrg')?.addEventListener('click', () => renderOrgForm(container, null, org.id));
-
-    container.querySelectorAll('.child-org').forEach(el => {
+    `).join('');
+    results.querySelectorAll('[data-sel-id]').forEach(el => {
       el.addEventListener('click', () => {
-        const id = el.dataset.childOrgId;
-        if (id) openOrgDetail(container, id);
+        document.getElementById(hiddenId).value = el.dataset.selId;
+        input.value = el.dataset.selName;
+        if (selectedId) document.getElementById(selectedId).textContent = el.dataset.selName;
+        results.innerHTML = '';
       });
     });
-
-    container.querySelectorAll('.org-contact').forEach(el => {
-      el.addEventListener('click', () => {
-        const id = el.dataset.contactId;
-        if (id) openContactDetail(container, id);
-      });
-    });
-
-  } catch (err) {
-    console.error('組織詳細エラー:', err);
-    showToast('組織情報の読み込みに失敗しました');
-    renderOrgList(container);
-  }
-}
-
-// ============================================================
-//  組織登録/編集フォーム
-// ============================================================
-async function renderOrgForm(container, org, parentId = null) {
-  currentView = 'org_form';
-  const isEdit = !!org;
-
-  // 親組織の選択肢用
-  let allOrgs = [];
-  try {
-    allOrgs = await getOrganizations();
-  } catch { /* ignore */ }
-
-  const data = org || {};
-  const presetParentId = parentId || data.parent_id || '';
-
-  container.innerHTML = `
-    <div style="background:${C.bg};min-height:100vh;padding-bottom:40px;">
-      <!-- ヘッダー -->
-      <div style="padding:16px;display:flex;align-items:center;gap:8px;">
-        <button id="orgFormBack" style="background:none;border:none;color:${C.navy};font-size:14px;cursor:pointer;padding:4px 0;">← 戻る</button>
-        <h2 style="color:${C.navy};font-size:16px;margin:0;flex:1;">${isEdit ? '組織編集' : '新規組織'}</h2>
-      </div>
-
-      <div style="padding:0 16px;">
-        <!-- 組織名（必須） -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">組織名 <span style="color:${C.danger};">*必須</span></label>
-          <input id="fOrgName" type="text" value="${escapeHtml(data.name || '')}" placeholder="例: 渡辺不動産"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:15px;outline:none;" />
-        </div>
-
-        <!-- タイプ -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">組織タイプ</label>
-          <select id="fOrgType"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;">
-            <option value="">選択してください</option>
-            ${['会社', '支店', '部署', '事務所', '団体', 'その他'].map(t =>
-              `<option value="${t}" ${(data.type || '') === t ? 'selected' : ''}>${t}</option>`
-            ).join('')}
-          </select>
-        </div>
-
-        <!-- 親組織 -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">親組織</label>
-          <select id="fOrgParent"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;">
-            <option value="">なし（トップレベル）</option>
-            ${allOrgs.filter(o => !isEdit || o.id !== org?.id).map(o =>
-              `<option value="${o.id}" ${presetParentId === o.id ? 'selected' : ''}>${escapeHtml(o.name)}</option>`
-            ).join('')}
-          </select>
-        </div>
-
-        <!-- 住所 -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">住所</label>
-          <input id="fOrgAddress" type="text" value="${escapeHtml(data.address || '')}" placeholder="例: 岐阜県岐阜市..."
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;" />
-        </div>
-
-        <!-- 電話 -->
-        <div style="margin-bottom:20px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">電話番号</label>
-          <input id="fOrgPhone" type="tel" value="${escapeHtml(data.phone || '')}" placeholder="例: 058-000-0000"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;" />
-        </div>
-
-        <!-- 保存ボタン -->
-        <button id="btnSaveOrg"
-          style="width:100%;padding:14px;border-radius:12px;border:none;background:${C.teal};color:${C.white};font-size:16px;font-weight:bold;cursor:pointer;margin-bottom:16px;">
-          ${isEdit ? '更新する' : '登録する'}
-        </button>
-      </div>
-    </div>
-  `;
-
-  // イベント
-  container.querySelector('#orgFormBack')?.addEventListener('click', () => {
-    if (isEdit && selectedOrg) {
-      openOrgDetail(container, selectedOrg.id);
-    } else if (parentId) {
-      openOrgDetail(container, parentId);
-    } else {
-      renderOrgList(container);
-    }
-  });
-
-  container.querySelector('#btnSaveOrg')?.addEventListener('click', async () => {
-    const name = container.querySelector('#fOrgName')?.value?.trim();
-    if (!name) {
-      showToast('組織名は必須です');
-      container.querySelector('#fOrgName')?.focus();
-      return;
-    }
-
-    const payload = {
-      name,
-      type: container.querySelector('#fOrgType')?.value || null,
-      parent_id: container.querySelector('#fOrgParent')?.value || null,
-      address: container.querySelector('#fOrgAddress')?.value?.trim() || null,
-      phone: container.querySelector('#fOrgPhone')?.value?.trim() || null,
-    };
-
-    try {
-      if (isEdit) {
-        await updateOrganization(org.id, payload);
-        showToast('組織を更新しました');
-        openOrgDetail(container, org.id);
-      } else {
-        const newOrg = await createOrganization(payload);
-        showToast('組織を登録しました');
-        if (newOrg?.id) {
-          openOrgDetail(container, newOrg.id);
-        } else {
-          renderOrgList(container);
-        }
-      }
-    } catch (err) {
-      console.error('組織保存エラー:', err);
-      showToast(isEdit ? '更新に失敗しました' : '登録に失敗しました');
-    }
-  });
-}
-
-// ============================================================
-//  関係登録フォーム
-// ============================================================
-async function renderRelationshipForm(container, fromContact) {
-  currentView = 'relationship_form';
-
-  // コンタクト一覧を取得（検索用）
-  let allContacts = [];
-  try {
-    allContacts = await getContacts({});
-  } catch { /* ignore */ }
-
-  const relationTypes = CONFIG.RELATIONSHIP_TYPES || ['紹介', '同僚', '友人', '上司・部下', '所属', '提携', 'その他'];
-
-  container.innerHTML = `
-    <div style="background:${C.bg};min-height:100vh;padding-bottom:40px;">
-      <!-- ヘッダー -->
-      <div style="padding:16px;display:flex;align-items:center;gap:8px;">
-        <button id="relFormBack" style="background:none;border:none;color:${C.navy};font-size:14px;cursor:pointer;padding:4px 0;">← 戻る</button>
-        <h2 style="color:${C.navy};font-size:16px;margin:0;">関係を追加</h2>
-      </div>
-
-      <div style="padding:0 16px;">
-        <!-- 元のコンタクト -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">コンタクト</label>
-          <div style="padding:10px 12px;border-radius:8px;background:${C.white};border:1px solid ${C.border};color:${C.textMain};font-size:14px;">
-            ${escapeHtml(fromContact.name)}
-          </div>
-        </div>
-
-        <!-- 関係先コンタクト（検索） -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">関係先 <span style="color:${C.danger};">*必須</span></label>
-          <div style="position:relative;">
-            <input id="relContactSearch" type="text" placeholder="名前で検索..."
-              style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;" />
-            <input id="relContactId" type="hidden" value="" />
-            <div id="relContactResults" style="display:none;position:absolute;top:100%;left:0;right:0;background:${C.white};border:1px solid ${C.border};border-radius:0 0 8px 8px;max-height:200px;overflow-y:auto;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>
-          </div>
-        </div>
-
-        <!-- 関係タイプ -->
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">関係タイプ <span style="color:${C.danger};">*必須</span></label>
-          <select id="relType"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:14px;outline:none;">
-            <option value="">選択してください</option>
-            ${relationTypes.map(t => `<option value="${t}">${t}</option>`).join('')}
-          </select>
-        </div>
-
-        <!-- メモ -->
-        <div style="margin-bottom:20px;">
-          <label style="font-size:12px;color:${C.textSub};display:block;margin-bottom:4px;">メモ（任意）</label>
-          <textarea id="relNote" rows="2" placeholder="補足情報があれば入力"
-            style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid ${C.border};background:${C.white};color:${C.textMain};font-size:13px;outline:none;resize:vertical;line-height:1.5;"></textarea>
-        </div>
-
-        <!-- 保存ボタン -->
-        <button id="btnSaveRelation"
-          style="width:100%;padding:14px;border-radius:12px;border:none;background:${C.navy};color:${C.white};font-size:16px;font-weight:bold;cursor:pointer;">
-          関係を登録
-        </button>
-      </div>
-    </div>
-  `;
-
-  // イベント
-  container.querySelector('#relFormBack')?.addEventListener('click', () => {
-    openContactDetail(container, fromContact.id);
-  });
-
-  // 関係先検索
-  const searchInput = container.querySelector('#relContactSearch');
-  const contactIdInput = container.querySelector('#relContactId');
-  const resultsEl = container.querySelector('#relContactResults');
-
-  searchInput?.addEventListener('input', () => {
-    const q = searchInput.value.trim().toLowerCase();
-    if (!q) {
-      resultsEl.style.display = 'none';
-      return;
-    }
-    const matched = allContacts
-      .filter(c => c.id !== fromContact.id && c.name.toLowerCase().includes(q))
-      .slice(0, 10);
-
-    if (matched.length === 0) {
-      resultsEl.style.display = 'none';
-      return;
-    }
-
-    resultsEl.style.display = 'block';
-    resultsEl.innerHTML = matched.map(c =>
-      `<div data-contact-id="${c.id}" style="padding:10px 12px;cursor:pointer;border-bottom:1px solid ${C.border};font-size:13px;color:${C.textMain};">
-        ${escapeHtml(c.name)}${c.organization?.name ? ` <span style="color:${C.textMuted};font-size:11px;">(${escapeHtml(c.organization.name)})</span>` : ''}
-      </div>`
-    ).join('');
-
-    resultsEl.querySelectorAll('[data-contact-id]').forEach(el => {
-      el.addEventListener('click', () => {
-        contactIdInput.value = el.dataset.contactId;
-        searchInput.value = el.textContent.trim();
-        resultsEl.style.display = 'none';
-      });
-    });
-  });
-
-  searchInput?.addEventListener('blur', () => {
-    setTimeout(() => { resultsEl.style.display = 'none'; }, 200);
-  });
-
-  // 保存
-  container.querySelector('#btnSaveRelation')?.addEventListener('click', async () => {
-    const toContactId = contactIdInput?.value;
-    const relType = container.querySelector('#relType')?.value;
-    const note = container.querySelector('#relNote')?.value?.trim() || null;
-
-    if (!toContactId) {
-      showToast('関係先のコンタクトを選択してください');
-      searchInput?.focus();
-      return;
-    }
-    if (!relType) {
-      showToast('関係タイプを選択してください');
-      return;
-    }
-
-    try {
-      await createRelationship({
-        from_contact_id: fromContact.id,
-        to_contact_id: toContactId,
-        type: relType,
-        note,
-      });
-      showToast('関係を登録しました');
-      openContactDetail(container, fromContact.id);
-    } catch (err) {
-      console.error('関係登録エラー:', err);
-      showToast('関係の登録に失敗しました');
-    }
   });
 }
